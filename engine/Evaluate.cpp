@@ -460,6 +460,8 @@ int evalBishop(
     U64 opponentPawnsBB = (board.blackPiecesBB & board.pawnsBB);
     if(color == Black) swap(ourPawnsBB, opponentPawnsBB);
 
+    U64 opponentPawnAttacksBB = pawnAttacks(opponentPawnsBB, (color ^ (White | Black)));
+
     U64 ourPiecesBB = (color == White ? board.whitePiecesBB : board.blackPiecesBB);
     U64 opponentPiecesBB = (color == Black ? board.whitePiecesBB : board.blackPiecesBB);
 
@@ -505,10 +507,10 @@ int evalBishop(
     U64 sqNearKing = (color == White ? squaresNearBlackKing[board.blackKingSquare] : squaresNearWhiteKing[board.whiteKingSquare]);
     U64 attacks = magicBishopAttacks((board.whitePiecesBB | board.blackPiecesBB), sq);
 
-    int mobility = popcount(attacks & ~ourPiecesBB);
+    int mobility = popcount(attacks & ~ourPiecesBB & ~opponentPawnAttacksBB);
     int attackedSquares = popcount(attacks & sqNearKing);
 
-    eval += BISHOP_MOBILITY * (mobility-7);
+    eval += BISHOP_MOBILITY * (mobility-5);
     if(attackedSquares) {
         if(color == White) {
             whiteAttackersCnt++;
@@ -537,6 +539,8 @@ int evalRook(
     U64 ourPawnsBB = (board.whitePiecesBB & board.pawnsBB);
     U64 opponentPawnsBB = (board.blackPiecesBB & board.pawnsBB);
     if(color == Black) swap(ourPawnsBB, opponentPawnsBB);
+
+    U64 opponentPawnAttacksBB = pawnAttacks(opponentPawnsBB, (color ^ (White | Black)));
 
     int opponentKingSquare = (color == White ? board.blackKingSquare : board.whiteKingSquare);
 
@@ -592,7 +596,7 @@ int evalRook(
     U64 sqNearKing = (color == White ? squaresNearBlackKing[board.blackKingSquare] : squaresNearWhiteKing[board.whiteKingSquare]);
     U64 attacks = magicRookAttacks((board.whitePiecesBB | board.blackPiecesBB), sq);
 
-    int mobility = popcount(attacks & ~ourPiecesBB);
+    int mobility = popcount(attacks & ~ourPiecesBB & ~opponentPawnAttacksBB);
     int attackedSquares = popcount(attacks & sqNearKing);
 
     eval += ROOK_MOBILITY * (mobility-7);
@@ -618,6 +622,9 @@ int evalQueen(
     U64 opponentPiecesBB = (color == Black ? board.whitePiecesBB : board.blackPiecesBB);
     U64 ourBishopsBB = (board.bishopsBB & ourPiecesBB);
     U64 ourKnightsBB = (board.knightsBB & ourPiecesBB);
+
+    U64 opponentPawnsBB = (board.pawnsBB & opponentPiecesBB);
+    U64 opponentPawnAttacksBB = pawnAttacks(opponentPawnsBB, (color ^ (White | Black)));
 
     int opponentKingSquare = (color == Black ? board.whiteKingSquare : board.blackKingSquare);
 
@@ -646,7 +653,7 @@ int evalQueen(
     U64 attacks = (magicBishopAttacks((board.whitePiecesBB | board.blackPiecesBB), sq)
                  | magicRookAttacks((board.whitePiecesBB | board.blackPiecesBB), sq));
 
-    int mobility = popcount(attacks & ~ourPiecesBB);
+    int mobility = popcount(attacks & ~ourPiecesBB & ~opponentPawnAttacksBB);
     int attackedSquares = popcount(attacks & sqNearKing);
 
     eval += QUEEN_MOBILITY * (mobility-14);
