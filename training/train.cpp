@@ -5,6 +5,7 @@
 #include <iostream>
 #include <math.h>
 #include <unordered_map>
+#include <iomanip>
 
 #include "../engine/Evaluate.h"
 #include "../engine/Board.h"
@@ -160,8 +161,7 @@ double Sigmoid(double ev) {
 }
 
 double loss(double ev, double res) {
-    double evBounded = (ev > 500 ? 500 : (ev < -500 ? -500 : ev)) / 500.0;
-    return (evBounded - res) * (evBounded - res);
+    return (Sigmoid(ev) - res) * (Sigmoid(ev) - res);
 }
 
 vector<int> gradientDescent(vector<int> initialGuess) {
@@ -233,13 +233,13 @@ vector<int> gradientDescent(vector<int> initialGuess) {
             std::cout << "Calculating gradient for param " << paramIdx << "... ";
             std::cout.flush();
 
-            bestParValues[paramIdx] += 1;
-            int loss1 = 0;
+            double loss1 = 0, loss2 = 0;
 
             for(pair<string, double> &p: positions) {
                 board.loadFenPos(p.first);
 
-                double ev = evaluate(false, 
+                bestParValues[paramIdx] += 1;
+                double ev1 = evaluate(false, 
                     *MG_KING_TABLE, *EG_KING_TABLE,
                     *QUEEN_TABLE, *ROOK_TABLE, *BISHOP_TABLE, 
                     *KNIGHT_TABLE, *MG_PAWN_TABLE, *EG_PAWN_TABLE, *PASSED_PAWN_TABLE,
@@ -255,20 +255,14 @@ vector<int> gradientDescent(vector<int> initialGuess) {
                     *DOUBLED_PAWNS_PENALTY, *WEAK_PAWN_PENALTY, *C_PAWN_PENALTY,
                     *TEMPO_BONUS);
 
-                if(board.turn == Black) ev *= -1;
+                if(board.turn == Black) ev1 *= -1;
 
                 assert(p.second == 1.0 || p.second == 0.0 || p.second == 0.5);
 
-                loss1 += loss(ev, p.second);
-            }
+                loss1 += loss(ev1, p.second);
 
-            bestParValues[paramIdx] -= 2;
-            int loss2 = 0;
-
-            for(pair<string, double> &p: positions) {
-                board.loadFenPos(p.first);
-
-                double ev = evaluate(false, 
+                bestParValues[paramIdx] -= 2;
+                double ev2 = evaluate(false, 
                     *MG_KING_TABLE, *EG_KING_TABLE,
                     *QUEEN_TABLE, *ROOK_TABLE, *BISHOP_TABLE, 
                     *KNIGHT_TABLE, *MG_PAWN_TABLE, *EG_PAWN_TABLE, *PASSED_PAWN_TABLE,
@@ -284,17 +278,18 @@ vector<int> gradientDescent(vector<int> initialGuess) {
                     *DOUBLED_PAWNS_PENALTY, *WEAK_PAWN_PENALTY, *C_PAWN_PENALTY,
                     *TEMPO_BONUS);
 
-                if(board.turn == Black) ev *= -1;
+                if(board.turn == Black) ev2 *= -1;
 
                 assert(p.second == 1.0 || p.second == 0.0 || p.second == 0.5);
 
-                loss2 += loss(ev, p.second);
+                loss2 += loss(ev2, p.second);
+
+                bestParValues[paramIdx] += 1; // restore
             }
 
             gradients[paramIdx] = (loss1 - loss2) / 2;
-            bestParValues[paramIdx] += 1; // restore
 
-            std::cout << "Done. Gradient: " << gradients[paramIdx] << "\n";
+            std::cout << "gradient=" << fixed << setprecision(2) << gradients[paramIdx] << "\n";
             std::cout.flush();
         }
 
@@ -304,7 +299,7 @@ vector<int> gradientDescent(vector<int> initialGuess) {
             bestParValues[paramIdx] -= static_cast<int>(round(learningRate * gradients[paramIdx]));
         }
 
-        int currLoss = 0;
+        double currLoss = 0;
         for(pair<string, double> &p: positions) {
             board.loadFenPos(p.first);
 
@@ -330,8 +325,10 @@ vector<int> gradientDescent(vector<int> initialGuess) {
 
             currLoss += loss(ev, p.second);
         }
-        std::cout << "Current loss: " << currLoss << "\n";
+        std::cout << "loss=" << fixed << setprecision(2) << currLoss << "; " 
+                  << "lr=" << fixed << setprecision(2) << learningRate << "\n";
 
+        learningRate *= 0.9;
     }
     return bestParValues;
 }
