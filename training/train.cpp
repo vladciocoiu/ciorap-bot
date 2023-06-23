@@ -17,7 +17,7 @@ void createPosVector(string input_file, int num) {
     ifstream fin(input_file);
 
     string str;
-    cout << "Parsing fens...\n";
+    std::cout << "Parsing fens...\n";
     while(getline(fin, str) && positions.size() < num) {
         stringstream test(str);
         string segment;
@@ -34,7 +34,7 @@ void createPosVector(string input_file, int num) {
 
         str = "";
     }
-    cout << "Parsed fens. Have " << positions.size() << " positions.\n";
+    std::cout << "Parsed fens. Have " << positions.size() << " positions.\n";
 
     fin.close();
 }
@@ -159,141 +159,186 @@ double Sigmoid(double ev) {
     return 1.0 / (1.0 + exp(-ev / 400.0));
 }
 
-int E(vector<int>& params) {
-    assert(params.size() == 9 * 64 + 7 + 6 + 3 + 24);
-
-    int MG_KING_TABLE[64], EG_KING_TABLE[64],
-        QUEEN_TABLE[64], ROOK_TABLE[64], BISHOP_TABLE[64], 
-        KNIGHT_TABLE[64], MG_PAWN_TABLE[64], EG_PAWN_TABLE[64], PASSED_PAWN_TABLE[64],
-        KING_SHIELD[3], PIECE_VALUES[7], PIECE_ATTACK_WEIGHT[6],
-        KNGIHT_MOBILITY, KNIGHT_PAWN_CONST, TRAPPED_KNIGHT_PENALTY,
-        KNIGHT_DEF_BY_PAWN, BLOCKING_C_KNIGHT, KNIGHT_PAIR_PENALTY, 
-        BISHOP_PAIR, TRAPPED_BISHOP_PENALTY, FIANCHETTO_BONUS, 
-        BISHOP_MOBILITY, BLOCKED_BISHOP_PENALTY,
-        ROOK_ON_QUEEN_FILE, ROOK_ON_OPEN_FILE, ROOK_PAWN_CONST,
-        ROOK_ON_SEVENTH, ROOKS_DEF_EACH_OTHER, ROOK_MOBILITY,
-        BLOCKED_ROOK_PENALTY,
-        EARLY_QUEEN_DEVELOPMENT, QUEEN_MOBILITY,
-        DOUBLED_PAWNS_PENALTY, WEAK_PAWN_PENALTY, C_PAWN_PENALTY,
-        TEMPO_BONUS;
-
-    int offset = 0;
-    for(int i = 0; i < 64; i++) MG_KING_TABLE[i] = params[offset++];
-    for(int i = 0; i < 64; i++) EG_KING_TABLE[i] = params[offset++];
-    for(int i = 0; i < 64; i++) QUEEN_TABLE[i] = params[offset++];
-    for(int i = 0; i < 64; i++) ROOK_TABLE[i] = params[offset++];
-    for(int i = 0; i < 64; i++) BISHOP_TABLE[i] = params[offset++];
-    for(int i = 0; i < 64; i++) KNIGHT_TABLE[i] = params[offset++];
-    for(int i = 0; i < 64; i++) MG_PAWN_TABLE[i] = params[offset++];
-    for(int i = 0; i < 64; i++) EG_PAWN_TABLE[i] = params[offset++];
-    for(int i = 0; i < 64; i++) PASSED_PAWN_TABLE[i] = params[offset++];
-
-    for(int i = 0; i < 3; i++) KING_SHIELD[i] = params[offset++];
-    for(int i = 0; i < 7; i++) PIECE_VALUES[i] = params[offset++];
-    for(int i = 0; i < 6; i++) PIECE_ATTACK_WEIGHT[i] = params[offset++];
-
-    KNGIHT_MOBILITY = params[offset++];
-    KNIGHT_PAWN_CONST = params[offset++];
-    TRAPPED_KNIGHT_PENALTY = params[offset++];
-    KNIGHT_DEF_BY_PAWN = params[offset++];
-    BLOCKING_C_KNIGHT = params[offset++];
-    KNIGHT_PAIR_PENALTY = params[offset++];
-    BISHOP_PAIR = params[offset++];
-    TRAPPED_BISHOP_PENALTY = params[offset++];
-    FIANCHETTO_BONUS = params[offset++];
-    BISHOP_MOBILITY = params[offset++];
-    BLOCKED_BISHOP_PENALTY = params[offset++];
-    ROOK_ON_QUEEN_FILE = params[offset++];
-    ROOK_ON_OPEN_FILE = params[offset++];
-    ROOK_PAWN_CONST = params[offset++];
-    ROOK_ON_SEVENTH = params[offset++];
-    ROOKS_DEF_EACH_OTHER = params[offset++];
-    ROOK_MOBILITY = params[offset++];
-    BLOCKED_ROOK_PENALTY = params[offset++];
-    EARLY_QUEEN_DEVELOPMENT = params[offset++];
-    QUEEN_MOBILITY = params[offset++];
-    DOUBLED_PAWNS_PENALTY = params[offset++];
-    WEAK_PAWN_PENALTY = params[offset++];
-    C_PAWN_PENALTY = params[offset++];
-    TEMPO_BONUS = params[offset++];
-
-    double mse = 0;
-    for(pair<string, double> &p: positions) {
-        board.loadFenPos(p.first);
-
-        double ev = evaluate(false, 
-            MG_KING_TABLE, EG_KING_TABLE,
-            QUEEN_TABLE, ROOK_TABLE, BISHOP_TABLE, 
-            KNIGHT_TABLE, MG_PAWN_TABLE, EG_PAWN_TABLE, PASSED_PAWN_TABLE,
-            KING_SHIELD, PIECE_VALUES, PIECE_ATTACK_WEIGHT,
-            KNGIHT_MOBILITY, KNIGHT_PAWN_CONST, TRAPPED_KNIGHT_PENALTY,
-            KNIGHT_DEF_BY_PAWN, BLOCKING_C_KNIGHT, KNIGHT_PAIR_PENALTY, 
-            BISHOP_PAIR, TRAPPED_BISHOP_PENALTY, FIANCHETTO_BONUS, 
-            BISHOP_MOBILITY, BLOCKED_BISHOP_PENALTY,
-            ROOK_ON_QUEEN_FILE, ROOK_ON_OPEN_FILE, ROOK_PAWN_CONST,
-            ROOK_ON_SEVENTH, ROOKS_DEF_EACH_OTHER, ROOK_MOBILITY,
-            BLOCKED_ROOK_PENALTY,
-            EARLY_QUEEN_DEVELOPMENT, QUEEN_MOBILITY,
-            DOUBLED_PAWNS_PENALTY, WEAK_PAWN_PENALTY, C_PAWN_PENALTY,
-            TEMPO_BONUS);
-
-        if(board.turn == Black) ev *= -1;
-
-        assert(p.second == 1.0 || p.second == 0.0 || p.second == 0.5);
-
-        double sig = Sigmoid(ev);
-        assert(sig <= 1 && sig >= 0);
-
-        mse += (Sigmoid(ev) - p.second) * (Sigmoid(ev) - p.second);
-    } 
-
-    return mse;
+double loss(double ev, double res) {
+    double evBounded = (ev > 500 ? 500 : (ev < -500 ? -500 : ev)) / 500.0;
+    return (evBounded - res) * (evBounded - res);
 }
 
-vector<int> trainParameters(vector<int> initialGuess) {
+vector<int> gradientDescent(vector<int> initialGuess) {
     const int nParams = initialGuess.size();
-    double bestE = E(initialGuess);
     vector<int> bestParValues = initialGuess;
-    bool improved = true;
-    int iteration = 0;
-    while ( improved ) {
-        cout << "Iteration " << iteration << " started.\n";
-        improved = false;
-        for (int pi = 580; pi < 581; pi++) {
-            bool improvedParam;
-            do {
-                improvedParam = false;
-                vector<int> newParValues = bestParValues;
-                newParValues[pi] += 1;
-                double newE = E(newParValues);
+    int numIterations = 10;
+    double learningRate = 0.1;
 
-                if (newE < bestE) {
-                    improvedParam = true;
-                    cout << "Found better value at parameter " << pi << ": " << bestParValues[pi] << " -> " << newParValues[pi] << ", mse=" << newE << '\n';
-                    bestE = newE;
-                    bestParValues = newParValues;
-                    improved = true;
-                } else {
-                    newParValues[pi] -= 2;
-                    newE = E(newParValues);
-                    if (newE < bestE) {
-                        improvedParam = true;
-                        cout << "Found better value at parameter " << pi << ": " << bestParValues[pi] << " -> " << newParValues[pi] << ", mse=" << newE << '\n';
-                        bestE = newE;
-                        bestParValues = newParValues;
-                        improved = true;
-                    }
-                }
-            } while(improvedParam);
-      }
-      iteration++;
-   }
-   return bestParValues;
+    int* MG_KING_TABLE[64], *EG_KING_TABLE[64],
+        *QUEEN_TABLE[64], *ROOK_TABLE[64], *BISHOP_TABLE[64], 
+        *KNIGHT_TABLE[64], *MG_PAWN_TABLE[64], *EG_PAWN_TABLE[64], *PASSED_PAWN_TABLE[64],
+        *KING_SHIELD[3], *PIECE_VALUES[7], *PIECE_ATTACK_WEIGHT[6],
+        *KNGIHT_MOBILITY, *KNIGHT_PAWN_CONST, *TRAPPED_KNIGHT_PENALTY,
+        *KNIGHT_DEF_BY_PAWN, *BLOCKING_C_KNIGHT, *KNIGHT_PAIR_PENALTY, 
+        *BISHOP_PAIR, *TRAPPED_BISHOP_PENALTY, *FIANCHETTO_BONUS, 
+        *BISHOP_MOBILITY, *BLOCKED_BISHOP_PENALTY,
+        *ROOK_ON_QUEEN_FILE, *ROOK_ON_OPEN_FILE, *ROOK_PAWN_CONST,
+        *ROOK_ON_SEVENTH, *ROOKS_DEF_EACH_OTHER, *ROOK_MOBILITY,
+        *BLOCKED_ROOK_PENALTY,
+        *EARLY_QUEEN_DEVELOPMENT, *QUEEN_MOBILITY,
+        *DOUBLED_PAWNS_PENALTY, *WEAK_PAWN_PENALTY, *C_PAWN_PENALTY,
+        *TEMPO_BONUS;
+
+    int offset = 0;
+    for(int i = 0; i < 64; i++) MG_KING_TABLE[i] = &bestParValues[offset++];
+    for(int i = 0; i < 64; i++) EG_KING_TABLE[i] = &bestParValues[offset++];
+    for(int i = 0; i < 64; i++) QUEEN_TABLE[i] = &bestParValues[offset++];
+    for(int i = 0; i < 64; i++) ROOK_TABLE[i] = &bestParValues[offset++];
+    for(int i = 0; i < 64; i++) BISHOP_TABLE[i] = &bestParValues[offset++];
+    for(int i = 0; i < 64; i++) KNIGHT_TABLE[i] = &bestParValues[offset++];
+    for(int i = 0; i < 64; i++) MG_PAWN_TABLE[i] = &bestParValues[offset++];
+    for(int i = 0; i < 64; i++) EG_PAWN_TABLE[i] = &bestParValues[offset++];
+    for(int i = 0; i < 64; i++) PASSED_PAWN_TABLE[i] = &bestParValues[offset++];
+
+    for(int i = 0; i < 3; i++) KING_SHIELD[i] = &bestParValues[offset++];
+    for(int i = 0; i < 7; i++) PIECE_VALUES[i] = &bestParValues[offset++];
+    for(int i = 0; i < 6; i++) PIECE_ATTACK_WEIGHT[i] = &bestParValues[offset++];
+
+    KNGIHT_MOBILITY = &bestParValues[offset++];
+    KNIGHT_PAWN_CONST = &bestParValues[offset++];
+    TRAPPED_KNIGHT_PENALTY = &bestParValues[offset++];
+    KNIGHT_DEF_BY_PAWN = &bestParValues[offset++];
+    BLOCKING_C_KNIGHT = &bestParValues[offset++];
+    KNIGHT_PAIR_PENALTY = &bestParValues[offset++];
+    BISHOP_PAIR = &bestParValues[offset++];
+    TRAPPED_BISHOP_PENALTY = &bestParValues[offset++];
+    FIANCHETTO_BONUS = &bestParValues[offset++];
+    BISHOP_MOBILITY = &bestParValues[offset++];
+    BLOCKED_BISHOP_PENALTY = &bestParValues[offset++];
+    ROOK_ON_QUEEN_FILE = &bestParValues[offset++];
+    ROOK_ON_OPEN_FILE = &bestParValues[offset++];
+    ROOK_PAWN_CONST = &bestParValues[offset++];
+    ROOK_ON_SEVENTH = &bestParValues[offset++];
+    ROOKS_DEF_EACH_OTHER = &bestParValues[offset++];
+    ROOK_MOBILITY = &bestParValues[offset++];
+    BLOCKED_ROOK_PENALTY = &bestParValues[offset++];
+    EARLY_QUEEN_DEVELOPMENT = &bestParValues[offset++];
+    QUEEN_MOBILITY = &bestParValues[offset++];
+    DOUBLED_PAWNS_PENALTY = &bestParValues[offset++];
+    WEAK_PAWN_PENALTY = &bestParValues[offset++];
+    C_PAWN_PENALTY = &bestParValues[offset++];
+    TEMPO_BONUS = &bestParValues[offset++];
+
+    vector<double> gradients(nParams, 0.0);
+
+    for(int iteration = 0; iteration < numIterations; iteration++) {
+        std::cout << "Iteration " << iteration << " started.\n";
+        for(int paramIdx = 592; paramIdx < nParams; paramIdx++) {
+            std::cout << "Calculating gradient for param " << paramIdx << "... ";
+            std::cout.flush();
+
+            bestParValues[paramIdx] += 1;
+            int loss1 = 0;
+
+            for(pair<string, double> &p: positions) {
+                board.loadFenPos(p.first);
+
+                double ev = evaluate(false, 
+                    *MG_KING_TABLE, *EG_KING_TABLE,
+                    *QUEEN_TABLE, *ROOK_TABLE, *BISHOP_TABLE, 
+                    *KNIGHT_TABLE, *MG_PAWN_TABLE, *EG_PAWN_TABLE, *PASSED_PAWN_TABLE,
+                    *KING_SHIELD, *PIECE_VALUES, *PIECE_ATTACK_WEIGHT,
+                    *KNGIHT_MOBILITY, *KNIGHT_PAWN_CONST, *TRAPPED_KNIGHT_PENALTY,
+                    *KNIGHT_DEF_BY_PAWN, *BLOCKING_C_KNIGHT, *KNIGHT_PAIR_PENALTY, 
+                    *BISHOP_PAIR, *TRAPPED_BISHOP_PENALTY, *FIANCHETTO_BONUS, 
+                    *BISHOP_MOBILITY, *BLOCKED_BISHOP_PENALTY,
+                    *ROOK_ON_QUEEN_FILE, *ROOK_ON_OPEN_FILE, *ROOK_PAWN_CONST,
+                    *ROOK_ON_SEVENTH, *ROOKS_DEF_EACH_OTHER, *ROOK_MOBILITY,
+                    *BLOCKED_ROOK_PENALTY,
+                    *EARLY_QUEEN_DEVELOPMENT, *QUEEN_MOBILITY,
+                    *DOUBLED_PAWNS_PENALTY, *WEAK_PAWN_PENALTY, *C_PAWN_PENALTY,
+                    *TEMPO_BONUS);
+
+                if(board.turn == Black) ev *= -1;
+
+                assert(p.second == 1.0 || p.second == 0.0 || p.second == 0.5);
+
+                loss1 += loss(ev, p.second);
+            }
+
+            bestParValues[paramIdx] -= 2;
+            int loss2 = 0;
+
+            for(pair<string, double> &p: positions) {
+                board.loadFenPos(p.first);
+
+                double ev = evaluate(false, 
+                    *MG_KING_TABLE, *EG_KING_TABLE,
+                    *QUEEN_TABLE, *ROOK_TABLE, *BISHOP_TABLE, 
+                    *KNIGHT_TABLE, *MG_PAWN_TABLE, *EG_PAWN_TABLE, *PASSED_PAWN_TABLE,
+                    *KING_SHIELD, *PIECE_VALUES, *PIECE_ATTACK_WEIGHT,
+                    *KNGIHT_MOBILITY, *KNIGHT_PAWN_CONST, *TRAPPED_KNIGHT_PENALTY,
+                    *KNIGHT_DEF_BY_PAWN, *BLOCKING_C_KNIGHT, *KNIGHT_PAIR_PENALTY, 
+                    *BISHOP_PAIR, *TRAPPED_BISHOP_PENALTY, *FIANCHETTO_BONUS, 
+                    *BISHOP_MOBILITY, *BLOCKED_BISHOP_PENALTY,
+                    *ROOK_ON_QUEEN_FILE, *ROOK_ON_OPEN_FILE, *ROOK_PAWN_CONST,
+                    *ROOK_ON_SEVENTH, *ROOKS_DEF_EACH_OTHER, *ROOK_MOBILITY,
+                    *BLOCKED_ROOK_PENALTY,
+                    *EARLY_QUEEN_DEVELOPMENT, *QUEEN_MOBILITY,
+                    *DOUBLED_PAWNS_PENALTY, *WEAK_PAWN_PENALTY, *C_PAWN_PENALTY,
+                    *TEMPO_BONUS);
+
+                if(board.turn == Black) ev *= -1;
+
+                assert(p.second == 1.0 || p.second == 0.0 || p.second == 0.5);
+
+                loss2 += loss(ev, p.second);
+            }
+
+            gradients[paramIdx] = (loss1 - loss2) / 2;
+            bestParValues[paramIdx] += 1; // restore
+
+            std::cout << "Done. Gradient: " << gradients[paramIdx] << "\n";
+            std::cout.flush();
+        }
+
+        // Update the parameters using the gradients and learning rate
+        std::cout << "Updating parameters...\n";
+        for (int paramIdx = 0; paramIdx < nParams; paramIdx++) {
+            bestParValues[paramIdx] -= static_cast<int>(round(learningRate * gradients[paramIdx]));
+        }
+
+        int currLoss = 0;
+        for(pair<string, double> &p: positions) {
+            board.loadFenPos(p.first);
+
+            double ev = evaluate(false, 
+                *MG_KING_TABLE, *EG_KING_TABLE,
+                *QUEEN_TABLE, *ROOK_TABLE, *BISHOP_TABLE, 
+                *KNIGHT_TABLE, *MG_PAWN_TABLE, *EG_PAWN_TABLE, *PASSED_PAWN_TABLE,
+                *KING_SHIELD, *PIECE_VALUES, *PIECE_ATTACK_WEIGHT,
+                *KNGIHT_MOBILITY, *KNIGHT_PAWN_CONST, *TRAPPED_KNIGHT_PENALTY,
+                *KNIGHT_DEF_BY_PAWN, *BLOCKING_C_KNIGHT, *KNIGHT_PAIR_PENALTY, 
+                *BISHOP_PAIR, *TRAPPED_BISHOP_PENALTY, *FIANCHETTO_BONUS, 
+                *BISHOP_MOBILITY, *BLOCKED_BISHOP_PENALTY,
+                *ROOK_ON_QUEEN_FILE, *ROOK_ON_OPEN_FILE, *ROOK_PAWN_CONST,
+                *ROOK_ON_SEVENTH, *ROOKS_DEF_EACH_OTHER, *ROOK_MOBILITY,
+                *BLOCKED_ROOK_PENALTY,
+                *EARLY_QUEEN_DEVELOPMENT, *QUEEN_MOBILITY,
+                *DOUBLED_PAWNS_PENALTY, *WEAK_PAWN_PENALTY, *C_PAWN_PENALTY,
+                *TEMPO_BONUS);
+
+            if(board.turn == Black) ev *= -1;
+
+            assert(p.second == 1.0 || p.second == 0.0 || p.second == 0.5);
+
+            currLoss += loss(ev, p.second);
+        }
+        std::cout << "Current loss: " << currLoss << "\n";
+
+    }
+    return bestParValues;
 }
 
 int main(int argc, char **argv) {
     if(argc != 4) {
-        cout << "Wrong number of arguments\n";
+        std::cout << "Wrong number of arguments\n";
         return 0;
     }
 
@@ -374,12 +419,12 @@ int main(int argc, char **argv) {
     100, 100, 100, 100, 100, 100, 100, 100,
     0, 0, 0, 0, 0, 0, 0, 0,
     5, 10, 5,
-    0, 400, 325, 350, 500, 975, 0,
+    0, 100, 325, 350, 500, 975, 0,
     0, 0, 2, 2, 3, 5,
     4, 3, 100, 15, 30, 20, 50, 100, 20, 5, 50, 10, 20, 3, 30, 5, 3, 50, 20, 2, 40, 15, 25, 10};
 
 
-    vector<int> newPar = trainParameters(par);
+    vector<int> newPar = gradientDescent(par);
 
     printParams(newPar, argv[2]);
 
