@@ -8,6 +8,7 @@
 extern int PIECE_VALUES[7];
 extern const int MG_WEIGHT[7];
 extern std::vector<double> gradients;
+extern std::vector<int> freq;
 
 extern const int 
     MG_KING_TABLE_IDX,

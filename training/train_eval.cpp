@@ -11,6 +11,7 @@ using namespace std;
 extern const int NUM_PARAMS = 9 * 64 + 7 + 6 + 3 + 24;
 
 vector<double> gradients(NUM_PARAMS, 0);
+vector<int> freq(NUM_PARAMS, 0);
 
 extern const int MG_KING_TABLE_IDX = 0,
     EG_KING_TABLE_IDX = 64,
@@ -210,10 +211,14 @@ int trainEvaluate(
     res += (mgWeight * mgKingScore + egWeight * egKingScore) / 24;
 
     // --- UPDATE GRADIENTS ---
-    gradients[MG_KING_TABLE_IDX + board.whiteKingSquare] += mgWeight / 24;
-    gradients[EG_KING_TABLE_IDX + board.whiteKingSquare] += egWeight / 24;
-    gradients[MG_KING_TABLE_IDX + TRAIN_FLIPPED[board.blackKingSquare]] -= mgWeight / 24;
-    gradients[EG_KING_TABLE_IDX + TRAIN_FLIPPED[board.blackKingSquare]] -= egWeight / 24;
+    gradients[MG_KING_TABLE_IDX + board.whiteKingSquare] += (double)(mgWeight) / 24.0;
+    gradients[EG_KING_TABLE_IDX + board.whiteKingSquare] += (double)(egWeight) / 24.0;
+    gradients[MG_KING_TABLE_IDX + TRAIN_FLIPPED[board.blackKingSquare]] -= (double)(mgWeight) / 24.0;
+    gradients[EG_KING_TABLE_IDX + TRAIN_FLIPPED[board.blackKingSquare]] -= (double)(egWeight) / 24.0;
+    freq[MG_KING_TABLE_IDX + board.whiteKingSquare] += (mgWeight > 0 ? 1 : 0);
+    freq[EG_KING_TABLE_IDX + board.whiteKingSquare] += (egWeight > 0 ? 1 : 0);
+    freq[MG_KING_TABLE_IDX + TRAIN_FLIPPED[board.blackKingSquare]] += (mgWeight > 0 ? 1 : 0);
+    freq[EG_KING_TABLE_IDX + TRAIN_FLIPPED[board.blackKingSquare]] += (egWeight > 0 ? 1 : 0);
 
     // tempo bonus
     if(board.turn == White) res += TEMPO_BONUS;
@@ -221,6 +226,7 @@ int trainEvaluate(
 
     // --- UPDATE GRADIENTS ---
     gradients[TEMPO_BONUS_IDX] += (board.turn == White ? 1 : -1);
+    freq[TEMPO_BONUS_IDX] += 1;
 
     // add scores for bishop and knight pairs
     if(popcount(board.whitePiecesBB & board.bishopsBB) >= 2) res += BISHOP_PAIR;
@@ -234,6 +240,10 @@ int trainEvaluate(
     gradients[BISHOP_PAIR_IDX] -= (popcount(board.blackPiecesBB & board.bishopsBB) >= 2 ? 1 : 0);
     gradients[KNIGHT_PAIR_PENALTY_IDX] -= (popcount(board.whitePiecesBB & board.knightsBB) >= 2 ? 1 : 0);
     gradients[KNIGHT_PAIR_PENALTY_IDX] += (popcount(board.blackPiecesBB & board.knightsBB) >= 2 ? 1 : 0);
+    freq[BISHOP_PAIR_IDX] += (popcount(board.whitePiecesBB & board.bishopsBB) >= 2 ? 1 : 0);
+    freq[BISHOP_PAIR_IDX] += (popcount(board.blackPiecesBB & board.bishopsBB) >= 2 ? 1 : 0);
+    freq[KNIGHT_PAIR_PENALTY_IDX] += (popcount(board.whitePiecesBB & board.knightsBB) >= 2 ? 1 : 0);
+    freq[KNIGHT_PAIR_PENALTY_IDX] += (popcount(board.blackPiecesBB & board.knightsBB) >= 2 ? 1 : 0);
 
     // low material corrections (adjusting the score for well known draws)
 
@@ -247,11 +257,6 @@ int trainEvaluate(
     }
 
     if(strongerPawns == 0) {
-        // --- UPDATE GRADIENTS ---
-        if(strongerPieces < 400 || (weakerPawns == 0 && weakerPieces == 2*PIECE_VALUES[Knight])) {
-            for(int i = 0; i < NUM_PARAMS; i++) gradients[i] = 0;
-        }
-
         // weaker side cannot be checkmated
         if(strongerPieces < 400) return 0;
         if(weakerPawns == 0 && weakerPieces == 2*PIECE_VALUES[Knight]) return 0;
@@ -264,13 +269,6 @@ int trainEvaluate(
         if((strongerPieces == PIECE_VALUES[Rook] + PIECE_VALUES[Bishop] || strongerPieces == PIECE_VALUES[Rook] + PIECE_VALUES[Knight])
            && weakerPieces == PIECE_VALUES[Rook])
             res /= 2;
-
-        // --- UPDATE GRADIENTS ---
-        if(strongerPieces == PIECE_VALUES[Rook] && (weakerPieces == PIECE_VALUES[Knight] || weakerPieces == PIECE_VALUES[Bishop]) )
-            for(int i = 0; i < NUM_PARAMS; i++) gradients[i] /= 2;
-        if((strongerPieces == PIECE_VALUES[Rook] + PIECE_VALUES[Bishop] || strongerPieces == PIECE_VALUES[Rook] + PIECE_VALUES[Knight])
-           && weakerPieces == PIECE_VALUES[Rook])
-            for(int i = 0; i < NUM_PARAMS; i++) gradients[i] /= 2;
     }
 
     return res;
@@ -384,6 +382,35 @@ int trainEvalKnight(
     }
     gradients[KNIGHT_DEF_BY_PAWN_IDX] += (ourPawnAttacksBB & bits[sq] ? 1 : 0) * (color == White ? 1 : -1);
 
+    freq[KNIGHT_TABLE_IDX + (color == White ? sq : TRAIN_FLIPPED[sq])] += 1;
+    freq[PIECE_VALUES_IDX + Knight] += 1;
+    freq[KNIGHT_MOBILITY_IDX] += 1;
+    freq[KNIGHT_PAWN_CONST_IDX] += 1;
+    freq[PIECE_ATTACK_WEIGHT_IDX + Knight] += (attackedSquares ? 1 : 0);
+    if(color == White) {
+        if (sq == a8 && (opponentPawnsBB & (bits[a7] | bits[c7])))
+            freq[TRAPPED_KNIGHT_PENALTY_IDX] += 1;
+        if (sq == a7 && (opponentPawnsBB & (bits[a6] | bits[c6])) && (opponentPawnsBB & (bits[b7] | bits[d7])))
+            freq[TRAPPED_KNIGHT_PENALTY_IDX] += 1;
+        if (sq == h8 && (opponentPawnsBB & (bits[h7] | bits[f7])))
+            freq[TRAPPED_KNIGHT_PENALTY_IDX] += 1;
+        if (sq == h7 && (opponentPawnsBB & (bits[f6] | bits[h6])) && (opponentPawnsBB & (bits[e7] | bits[g7])))
+            freq[TRAPPED_KNIGHT_PENALTY_IDX] += 1;
+        if (sq == c3 && (ourPawnsBB & bits[c2]) && (ourPawnsBB & bits[d4]) && !(ourPawnsBB & bits[e4]))
+            freq[BLOCKING_C_KNIGHT_IDX] += 1;
+    }
+    if(color == Black) {
+        if (sq == a1 && (opponentPawnsBB & (bits[a2] | bits[c2])))
+            freq[TRAPPED_KNIGHT_PENALTY_IDX] += 1;
+        if (sq == a2 && (opponentPawnsBB & (bits[a3] | bits[c3])) && (opponentPawnsBB & (bits[b2] | bits[d2])))
+            freq[TRAPPED_KNIGHT_PENALTY_IDX] += 1;
+        if (sq == h1 && (opponentPawnsBB & (bits[h2] | bits[f2])))
+            freq[TRAPPED_KNIGHT_PENALTY_IDX] += 1;
+        if (sq == h2 && (opponentPawnsBB & (bits[f3] | bits[h3])) && (opponentPawnsBB & (bits[e2] | bits[g2])))
+            freq[TRAPPED_KNIGHT_PENALTY_IDX] += 1;
+        if (sq == c6 && (ourPawnsBB & bits[c7]) && (ourPawnsBB & bits[d5]) && !(ourPawnsBB & bits[e5]))
+            freq[BLOCKING_C_KNIGHT_IDX] += 1;
+    }
 
     return eval;
 }
@@ -492,6 +519,39 @@ int trainEvalBishop(
        gradients[FIANCHETTO_BONUS_IDX] -= 1;
     if(color == Black && sq == b7 && (ourPawnsBB & bits[b6]) && (ourPawnsBB & bits[c7]))
         gradients[FIANCHETTO_BONUS_IDX] -= 1;
+
+    freq[BISHOP_TABLE_IDX + (color == White ? sq : TRAIN_FLIPPED[sq])] += 1;
+    freq[PIECE_VALUES_IDX + Bishop] += 1;
+    freq[BISHOP_MOBILITY_IDX] += 1;
+    freq[PIECE_ATTACK_WEIGHT_IDX + Bishop] += (attackedSquares ? 1 : 0);
+    if(color == White) {
+        if (sq == a7 && (opponentPawnsBB & bits[b6]) && (opponentPawnsBB & bits[c7]))
+            freq[TRAPPED_BISHOP_PENALTY_IDX] += 1;
+        if (sq == h7 && (opponentPawnsBB & bits[g6]) && (opponentPawnsBB & bits[f7]))
+            freq[TRAPPED_BISHOP_PENALTY_IDX] += 1;
+        if (sq == c1 && (ourPawnsBB & bits[d2]) & (ourPiecesBB & bits[e3]))
+            freq[BLOCKED_BISHOP_PENALTY_IDX] += 1;
+        if (sq == f1 && (ourPawnsBB & bits[e2]) & (ourPiecesBB & bits[d3]))
+            freq[BLOCKED_BISHOP_PENALTY_IDX] += 1;
+    }
+    if(color == Black) {
+        if (sq == a2 && (opponentPawnsBB & bits[b3]) && (opponentPawnsBB & bits[c2]))
+            freq[TRAPPED_BISHOP_PENALTY_IDX] += 1;
+        if (sq == h2 && (opponentPawnsBB & bits[g3]) && (opponentPawnsBB & bits[f2]))
+            freq[TRAPPED_BISHOP_PENALTY_IDX] += 1;
+        if (sq == c8 && (ourPawnsBB & bits[d7]) & (ourPiecesBB & bits[e6]))
+            freq[BLOCKED_BISHOP_PENALTY_IDX] += 1;
+        if (sq == f8 && (ourPawnsBB & bits[e7]) & (ourPiecesBB & bits[d6]))
+            freq[BLOCKED_BISHOP_PENALTY_IDX] += 1;
+    }
+    if(color == White && sq == g2 && (ourPawnsBB & bits[g3]) && (ourPawnsBB & bits[f2]))
+        freq[FIANCHETTO_BONUS_IDX] += 1;
+    if(color == White && sq == b2 && (ourPawnsBB & bits[b3]) && (ourPawnsBB & bits[c2]))
+        freq[FIANCHETTO_BONUS_IDX] += 1;
+    if(color == Black && sq == g7 && (ourPawnsBB & bits[g6]) && (ourPawnsBB & bits[f7]))
+         freq[FIANCHETTO_BONUS_IDX] += 1;
+    if(color == Black && sq == b7 && (ourPawnsBB & bits[b6]) && (ourPawnsBB & bits[c7]))
+        freq[FIANCHETTO_BONUS_IDX] += 1;
 
     return eval;
 }
@@ -605,6 +665,28 @@ int trainEvalRook(
             gradients[BLOCKED_ROOK_PENALTY_IDX] += 1;
     }
 
+    freq[ROOK_TABLE_IDX + (color == White ? sq : TRAIN_FLIPPED[sq])] += 1;
+    freq[PIECE_VALUES_IDX + Rook] += 1;
+    freq[ROOK_PAWN_CONST_IDX] += 1;
+    freq[ROOK_ON_OPEN_FILE_IDX] += (!ourBlockingPawns ? 1 : 0);
+    freq[ROOK_ON_SEVENTH_IDX] += (sq/8 == seventhRank && (opponentKingSquare/8 == eighthRank || (opponentPawnsBB & ranksBB[seventhRank])) ? 1 : 0);
+    freq[ROOKS_DEF_EACH_OTHER_IDX] += (((board.rooksBB & ourPiecesBB & (currRankBB | currFileBB)) ^ bits[sq]) ? 1 : 0);
+    freq[ROOK_ON_QUEEN_FILE_IDX] += (currFileBB & opponentPiecesBB & board.queensBB ? 1 : 0);
+    freq[ROOK_MOBILITY_IDX] += 1;
+    freq[PIECE_ATTACK_WEIGHT_IDX + Rook] += (attackedSquares ? 1 : 0);
+    if(color == White) {
+        if((board.whiteKingSquare == f1 || board.whiteKingSquare == g1) && (sq == g1 || sq == h1))
+            freq[BLOCKED_ROOK_PENALTY_IDX] += 1;
+        if((board.whiteKingSquare == c1 || board.whiteKingSquare == b1) && (sq == a1 || sq == b1))
+            freq[BLOCKED_ROOK_PENALTY_IDX] += 1;
+    }
+    if (color == Black) {
+        if ((board.whiteKingSquare == f8 || board.whiteKingSquare == g8) && (sq == g8 || sq == h8))
+            freq[BLOCKED_ROOK_PENALTY_IDX] += 1;
+        if ((board.whiteKingSquare == c8 || board.whiteKingSquare == b8) && (sq == a8 || sq == b8))
+            freq[BLOCKED_ROOK_PENALTY_IDX] += 1;
+    }
+
     return eval;
 }
 
@@ -680,6 +762,23 @@ int trainEvalQueen(
         if(ourKnightsBB & bits[g8]) gradients[EARLY_QUEEN_DEVELOPMENT_IDX] += 1;
     }
 
+    freq[QUEEN_TABLE_IDX + (color == White ? sq : TRAIN_FLIPPED[sq])] += 1;
+    freq[PIECE_VALUES_IDX + Queen] += 1;
+    freq[QUEEN_MOBILITY_IDX] += 1;
+    freq[PIECE_ATTACK_WEIGHT_IDX + Queen] += (attackedSquares ? 1 : 0);
+    if(color == White && sq/8 > 1) {
+        if(ourKnightsBB & bits[b1]) freq[EARLY_QUEEN_DEVELOPMENT_IDX] += 1;
+        if(ourBishopsBB & bits[c1]) freq[EARLY_QUEEN_DEVELOPMENT_IDX] += 1;
+        if(ourBishopsBB & bits[f1]) freq[EARLY_QUEEN_DEVELOPMENT_IDX] += 1;
+        if(ourKnightsBB & bits[g1]) freq[EARLY_QUEEN_DEVELOPMENT_IDX] += 1;
+    }
+    if(color == Black && sq/8 < 6) {
+        if(ourKnightsBB & bits[b8]) freq[EARLY_QUEEN_DEVELOPMENT_IDX] += 1;
+        if(ourBishopsBB & bits[c8]) freq[EARLY_QUEEN_DEVELOPMENT_IDX] += 1;
+        if(ourBishopsBB & bits[f8]) freq[EARLY_QUEEN_DEVELOPMENT_IDX] += 1;
+        if(ourKnightsBB & bits[g8]) freq[EARLY_QUEEN_DEVELOPMENT_IDX] += 1;
+    }
+
     return eval;
 }
 
@@ -719,30 +818,57 @@ int trainWhiteKingShield(int KING_SHIELD[3]) {
     }
 
     // --- UPDATE GRADIENTS ---
+    int mgScore = min(24, trainGamePhase());
     if(sq%8 < 3) {
-        if(ourPawnsBB & bits[a2]) gradients[KING_SHIELD_IDX] += 1;
-        else if(ourPawnsBB & bits[a3]) gradients[KING_SHIELD_IDX+1] += 1;
-        else gradients[KING_SHIELD_IDX+2] -= 1;
+        if(ourPawnsBB & bits[a2]) gradients[KING_SHIELD_IDX] += (double)(mgScore) / 24.0;
+        else if(ourPawnsBB & bits[a3]) gradients[KING_SHIELD_IDX+1] += (double)(mgScore) / 24.0;
+        else gradients[KING_SHIELD_IDX+2] -= (double)(mgScore) / 24.0;
 
-        if(ourPawnsBB & bits[b2]) gradients[KING_SHIELD_IDX] += 1;
-        else if(ourPawnsBB & bits[b3]) gradients[KING_SHIELD_IDX+1] += 1;
-        else gradients[KING_SHIELD_IDX+2] -= 1;
+        if(ourPawnsBB & bits[b2]) gradients[KING_SHIELD_IDX] += (double)(mgScore) / 24.0;
+        else if(ourPawnsBB & bits[b3]) gradients[KING_SHIELD_IDX+1] += (double)(mgScore) / 24.0;
+        else gradients[KING_SHIELD_IDX+2] -= (double)(mgScore) / 24.0;
 
-        if(ourPawnsBB & bits[c2]) gradients[KING_SHIELD_IDX] += 1;
-        else if(ourPawnsBB & bits[c3]) gradients[KING_SHIELD_IDX+1] += 1;
-        else gradients[KING_SHIELD_IDX+2] -= 1;
+        if(ourPawnsBB & bits[c2]) gradients[KING_SHIELD_IDX] += (double)(mgScore) / 24.0;
+        else if(ourPawnsBB & bits[c3]) gradients[KING_SHIELD_IDX+1] += (double)(mgScore) / 24.0;
+        else gradients[KING_SHIELD_IDX+2] -= (double)(mgScore) / 24.0;
     } else if (sq%8 > 4) {
-        if (ourPawnsBB & bits[f2]) gradients[KING_SHIELD_IDX] += 1;
-        else if (ourPawnsBB & bits[f3]) gradients[KING_SHIELD_IDX + 1] += 1;
-        else gradients[KING_SHIELD_IDX + 2] -= 1;
+        if (ourPawnsBB & bits[f2]) gradients[KING_SHIELD_IDX] += (double)(mgScore) / 24.0;
+        else if (ourPawnsBB & bits[f3]) gradients[KING_SHIELD_IDX + 1] += (double)(mgScore) / 24.0;
+        else gradients[KING_SHIELD_IDX + 2] -= (double)(mgScore) / 24.0;
 
-        if (ourPawnsBB & bits[g2]) gradients[KING_SHIELD_IDX] += 1;
-        else if (ourPawnsBB & bits[g3]) gradients[KING_SHIELD_IDX + 1] += 1;
-        else gradients[KING_SHIELD_IDX + 2] -= 1;
+        if (ourPawnsBB & bits[g2]) gradients[KING_SHIELD_IDX] += (double)(mgScore) / 24.0;
+        else if (ourPawnsBB & bits[g3]) gradients[KING_SHIELD_IDX + 1] += (double)(mgScore) / 24.0;
+        else gradients[KING_SHIELD_IDX + 2] -= (double)(mgScore) / 24.0;
 
-        if (ourPawnsBB & bits[h2]) gradients[KING_SHIELD_IDX] += 1;
-        else if (ourPawnsBB & bits[h3]) gradients[KING_SHIELD_IDX + 1] += 1;
-        else gradients[KING_SHIELD_IDX + 2] -= 1;
+        if (ourPawnsBB & bits[h2]) gradients[KING_SHIELD_IDX] += (double)(mgScore) / 24.0;
+        else if (ourPawnsBB & bits[h3]) gradients[KING_SHIELD_IDX + 1] += (double)(mgScore) / 24.0;
+        else gradients[KING_SHIELD_IDX + 2] -= (double)(mgScore) / 24.0;
+    }
+
+    if (sq%8 < 3 && mgScore > 0) {
+        if (ourPawnsBB & bits[a2]) freq[KING_SHIELD_IDX] += 1;
+        else if (ourPawnsBB & bits[a3]) freq[KING_SHIELD_IDX + 1] += 1;
+        else freq[KING_SHIELD_IDX + 2] += 1;
+
+        if (ourPawnsBB & bits[b2]) freq[KING_SHIELD_IDX] += 1;
+        else if (ourPawnsBB & bits[b3]) freq[KING_SHIELD_IDX + 1] += 1;
+        else freq[KING_SHIELD_IDX + 2] += 1;
+
+        if (ourPawnsBB & bits[c2]) freq[KING_SHIELD_IDX] += 1;
+        else if (ourPawnsBB & bits[c3]) freq[KING_SHIELD_IDX + 1] += 1;
+        else freq[KING_SHIELD_IDX + 2] += 1;
+    } else if (sq%8 > 4 && mgScore > 0) {
+        if (ourPawnsBB & bits[f2]) freq[KING_SHIELD_IDX] += 1;
+        else if (ourPawnsBB & bits[f3]) freq[KING_SHIELD_IDX + 1] += 1;
+        else freq[KING_SHIELD_IDX + 2] += 1;
+
+        if (ourPawnsBB & bits[g2]) freq[KING_SHIELD_IDX] += 1;
+        else if (ourPawnsBB & bits[g3]) freq[KING_SHIELD_IDX + 1] += 1;
+        else freq[KING_SHIELD_IDX + 2] += 1;
+
+        if (ourPawnsBB & bits[h2]) freq[KING_SHIELD_IDX] += 1;
+        else if (ourPawnsBB & bits[h3]) freq[KING_SHIELD_IDX + 1] += 1;
+        else freq[KING_SHIELD_IDX + 2] += 1;
     }
 
     return eval;
@@ -754,6 +880,7 @@ int trainBlackKingShield(int KING_SHIELD[3]) {
 
     int eval = 0;
     // queen side
+
     if(sq%8 < 3) {
         if(ourPawnsBB & bits[a7]) eval += KING_SHIELD[1];
         else if(ourPawnsBB & bits[a6]) eval += KING_SHIELD[2];
@@ -784,30 +911,57 @@ int trainBlackKingShield(int KING_SHIELD[3]) {
     }
 
     // --- UPDATE GRADIENTS ---
+    int mgScore = min(24, trainGamePhase());
     if(sq%8 < 3) {
-        if(ourPawnsBB & bits[a7]) gradients[KING_SHIELD_IDX] -= 1;
-        else if(ourPawnsBB & bits[a6]) gradients[KING_SHIELD_IDX+1] -= 1;
-        else gradients[KING_SHIELD_IDX+2] += 1;
+        if(ourPawnsBB & bits[a7]) gradients[KING_SHIELD_IDX] -= (double)(mgScore) / 24.0;
+        else if(ourPawnsBB & bits[a6]) gradients[KING_SHIELD_IDX+1] -= (double)(mgScore) / 24.0;
+        else gradients[KING_SHIELD_IDX+2] += (double)(mgScore) / 24.0;
 
-        if(ourPawnsBB & bits[b7]) gradients[KING_SHIELD_IDX] -= 1;
-        else if(ourPawnsBB & bits[b6]) gradients[KING_SHIELD_IDX+1] -= 1;
-        else gradients[KING_SHIELD_IDX+2] += 1;
+        if(ourPawnsBB & bits[b7]) gradients[KING_SHIELD_IDX] -= (double)(mgScore) / 24.0;
+        else if(ourPawnsBB & bits[b6]) gradients[KING_SHIELD_IDX+1] -= (double)(mgScore) / 24.0;
+        else gradients[KING_SHIELD_IDX+2] += (double)(mgScore) / 24.0;
 
-        if(ourPawnsBB & bits[c7]) gradients[KING_SHIELD_IDX] -= 1;
-        else if(ourPawnsBB & bits[c6]) gradients[KING_SHIELD_IDX+1] -= 1;
-        else gradients[KING_SHIELD_IDX+2] += 1;
+        if(ourPawnsBB & bits[c7]) gradients[KING_SHIELD_IDX] -= (double)(mgScore) / 24.0;
+        else if(ourPawnsBB & bits[c6]) gradients[KING_SHIELD_IDX+1] -= (double)(mgScore) / 24.0;
+        else gradients[KING_SHIELD_IDX+2] += (double)(mgScore) / 24.0;
     } else if (sq%8 > 4) {
-        if (ourPawnsBB & bits[f7]) gradients[KING_SHIELD_IDX] -= 1;
-        else if (ourPawnsBB & bits[f6]) gradients[KING_SHIELD_IDX + 1] -= 1;
-        else gradients[KING_SHIELD_IDX + 2] += 1;
+        if (ourPawnsBB & bits[f7]) gradients[KING_SHIELD_IDX] -= (double)(mgScore) / 24.0;
+        else if (ourPawnsBB & bits[f6]) gradients[KING_SHIELD_IDX + 1] -= (double)(mgScore) / 24.0;
+        else gradients[KING_SHIELD_IDX + 2] += (double)(mgScore) / 24.0;
 
-        if (ourPawnsBB & bits[g7]) gradients[KING_SHIELD_IDX] -= 1;
-        else if (ourPawnsBB & bits[g6]) gradients[KING_SHIELD_IDX + 1] -= 1;
-        else gradients[KING_SHIELD_IDX + 2] += 1;
+        if (ourPawnsBB & bits[g7]) gradients[KING_SHIELD_IDX] -= (double)(mgScore) / 24.0;
+        else if (ourPawnsBB & bits[g6]) gradients[KING_SHIELD_IDX + 1] -= (double)(mgScore) / 24.0;
+        else gradients[KING_SHIELD_IDX + 2] += (double)(mgScore) / 24.0;
 
-        if (ourPawnsBB & bits[h7]) gradients[KING_SHIELD_IDX] -= 1;
-        else if (ourPawnsBB & bits[h6]) gradients[KING_SHIELD_IDX + 1] -= 1;
-        else gradients[KING_SHIELD_IDX + 2] += 1;
+        if (ourPawnsBB & bits[h7]) gradients[KING_SHIELD_IDX] -= (double)(mgScore) / 24.0;
+        else if (ourPawnsBB & bits[h6]) gradients[KING_SHIELD_IDX + 1] -= (double)(mgScore) / 24.0;
+        else gradients[KING_SHIELD_IDX + 2] += (double)(mgScore) / 24.0;
+    }
+
+    if (sq%8 < 3 && mgScore > 0) {
+        if (ourPawnsBB & bits[a7]) freq[KING_SHIELD_IDX] += 1;
+        else if (ourPawnsBB & bits[a6]) freq[KING_SHIELD_IDX + 1] += 1;
+        else freq[KING_SHIELD_IDX + 2] += 1;
+
+        if (ourPawnsBB & bits[b7]) freq[KING_SHIELD_IDX] += 1;
+        else if (ourPawnsBB & bits[b6]) freq[KING_SHIELD_IDX + 1] += 1;
+        else freq[KING_SHIELD_IDX + 2] += 1;
+
+        if (ourPawnsBB & bits[c7]) freq[KING_SHIELD_IDX] += 1;
+        else if (ourPawnsBB & bits[c6]) freq[KING_SHIELD_IDX + 1] += 1;
+        else freq[KING_SHIELD_IDX + 2] += 1;
+    } else if (sq%8 > 4 && mgScore > 0) {
+        if (ourPawnsBB & bits[f7]) freq[KING_SHIELD_IDX] += 1;
+        else if (ourPawnsBB & bits[f6]) freq[KING_SHIELD_IDX + 1] += 1;
+        else freq[KING_SHIELD_IDX + 2] += 1;
+
+        if (ourPawnsBB & bits[g7]) freq[KING_SHIELD_IDX] += 1;
+        else if (ourPawnsBB & bits[g6]) freq[KING_SHIELD_IDX + 1] += 1;
+        else freq[KING_SHIELD_IDX + 2] += 1;
+
+        if (ourPawnsBB & bits[h7]) freq[KING_SHIELD_IDX] += 1;
+        else if (ourPawnsBB & bits[h6]) freq[KING_SHIELD_IDX + 1] += 1;
+        else freq[KING_SHIELD_IDX + 2] += 1;
     }
 
     return eval;
@@ -928,17 +1082,38 @@ int trainEvalPawn(
 
     // --- UPDATE GRADIENTS ---
     gradients[PIECE_VALUES_IDX + Pawn] += (color == White ? 1 : -1);
-    gradients[MG_PAWN_TABLE_IDX + (color == White ? sq : TRAIN_FLIPPED[sq])] += (color == White ? 1 : -1) * mgWeight / 24;
-    gradients[EG_PAWN_TABLE_IDX + (color == White ? sq : TRAIN_FLIPPED[sq])] += (color == White ? 1 : -1) * egWeight / 24;
-    gradients[PASSED_PAWN_TABLE_IDX + (color == White ? sq : TRAIN_FLIPPED[sq])] += (passed ? 1 : 0) * (color == White ? 1 : -1) * (ourPawnAttacksBB & bits[sq] ? double(4 / 3) : 1);
-    gradients[WEAK_PAWN_PENALTY_IDX] += (weak ? -1 : 0) * (color == White ? 1 : -1) * ((!opposed) ? double(4 / 3) : 1);
+    gradients[MG_PAWN_TABLE_IDX + (color == White ? sq : TRAIN_FLIPPED[sq])] += (color == White ? 1 : -1) * (double)(mgWeight) / 24.0;
+    gradients[EG_PAWN_TABLE_IDX + (color == White ? sq : TRAIN_FLIPPED[sq])] += (color == White ? 1 : -1) * (double)(egWeight) / 24.0;
+    gradients[PASSED_PAWN_TABLE_IDX + (color == White ? sq : TRAIN_FLIPPED[sq])] += (passed ? 1 : 0) * (color == White ? 1 : -1) * (ourPawnAttacksBB & bits[sq] ? (double)(4 / 3) : 1);
+    gradients[WEAK_PAWN_PENALTY_IDX] += (weak ? -1 : 0) * (color == White ? 1 : -1) * ((!opposed) ? (double)(4 / 3) : 1);
     curSq = sq+dir;
     while(curSq < 64 && curSq >= 0) {
         if(board.pawnsBB & bits[curSq]) {
-            gradients[DOUBLED_PAWNS_PENALTY_IDX] += (ourPiecesBB & bits[curSq] ? -1 : 0) * (color == White ? 1 : -1);
+            gradients[DOUBLED_PAWNS_PENALTY_IDX] += ((ourPiecesBB & bits[curSq]) ? -1 : 0) * (color == White ? 1 : -1);
         }
         curSq += dir;
     }
+    if(color == White && sq == c2 && (ourPawnsBB & bits[d4]) && !(ourPawnsBB & bits[e4]))
+        gradients[C_PAWN_PENALTY_IDX] += -1;
+    if(color == Black && sq == c7 && (ourPawnsBB & bits[d5]) && !(ourPawnsBB & bits[e5]))
+        gradients[C_PAWN_PENALTY_IDX] += 1;
+    
+    freq[PIECE_VALUES_IDX + Pawn] += 1;
+    freq[MG_PAWN_TABLE_IDX + (color == White ? sq : TRAIN_FLIPPED[sq])] += (mgWeight > 0 ? 1 : 0);
+    freq[EG_PAWN_TABLE_IDX + (color == White ? sq : TRAIN_FLIPPED[sq])] += (egWeight > 0 ? 1 : 0);
+    freq[PASSED_PAWN_TABLE_IDX + (color == White ? sq : TRAIN_FLIPPED[sq])] += (passed ? 1 : 0);
+    freq[WEAK_PAWN_PENALTY_IDX] += (weak ? 1 : 0);
+    curSq = sq+dir;
+    while(curSq < 64 && curSq >= 0) {
+        if(board.pawnsBB & bits[curSq]) {
+            freq[DOUBLED_PAWNS_PENALTY_IDX] += ((ourPiecesBB & bits[curSq]) ? 1 : 0);
+        }
+        curSq += dir;
+    }
+    if(color == White && sq == c2 && (ourPawnsBB & bits[d4]) && !(ourPawnsBB & bits[e4]))
+        freq[C_PAWN_PENALTY_IDX] += 1;
+    if(color == Black && sq == c7 && (ourPawnsBB & bits[d5]) && !(ourPawnsBB & bits[e5]))
+        freq[C_PAWN_PENALTY_IDX] += 1;
 
     return eval;
 }
