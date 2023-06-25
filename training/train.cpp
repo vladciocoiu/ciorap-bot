@@ -204,7 +204,7 @@ vector<int> gradientDescent(vector<int> initialGuess) {
     double bestLoss = 1e9;
     const int batch_size = 512;
     const double MIN_LR = 100;
-    const int trainSize = (positions.size() * 8) / 10;
+    const int trainSize = (positions.size() * 9) / 10;
     const int valSize = positions.size() - trainSize;
     int batches = (positions.size() + batch_size - 1) / batch_size;
 
@@ -282,7 +282,7 @@ vector<int> gradientDescent(vector<int> initialGuess) {
         std::cout.flush();
         double currLoss = 0;
 
-
+        std::shuffle(trainPositions.begin(), trainPositions.end(), rng);
         for(int batch = 0; batch < batches; batch++) {
             int batch_start_idx = batch * batch_size;
             // set gradients vector to 0
@@ -359,7 +359,9 @@ vector<int> gradientDescent(vector<int> initialGuess) {
         if ((bestLoss - valLoss) > EPS) {
             bestLoss = valLoss;
             bestParValues = currParValues;
-            std::cout << "Found new bestLoss=" << fixed << setprecision(5) << bestLoss / (double)valPositions.size() << " printing params...\n";
+
+            const string params_output_file = "best_params.txt";
+            std::cout << "Found new bestLoss=" << fixed << setprecision(5) << bestLoss / (double)valPositions.size() << ". Saving params to " << params_output_file << "...\n";
             std::cout.flush();
             printParams(bestParValues, "best_params.txt");
             epochsFromLRReduce = 0;
