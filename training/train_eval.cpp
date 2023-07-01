@@ -11,6 +11,7 @@ using namespace std;
 extern const int NUM_PARAMS = 9 * 64 + 7 + 6 + 3 + 24;
 
 vector<double> gradients(NUM_PARAMS, 0);
+vector<double> params(NUM_PARAMS, 0.0);
 vector<int> freq(NUM_PARAMS, 0);
 
 extern const int MG_KING_TABLE_IDX = 0,
@@ -78,74 +79,21 @@ int TRAIN_KING_SAFETY_TABLE[100] = {
 };
 
 int trainWhiteAttackersCnt, trainBlackAttackersCnt, trainWhiteAttackWeight, trainBlackAttackWeight;
-int trainPawnCntWhite, trainPawnCntBlack, trainPieceMaterialWhite, trainPieceMaterialBlack;
+int trainPawnCntWhite, trainPawnCntBlack;
+double trainPieceMaterialWhite, trainPieceMaterialBlack;
 
 int trainGamePhase();
 
-int trainEvalPawn(
-    int sq, int color, 
-    int MG_PAWN_TABLE[64], int EG_PAWN_TABLE[64], int PASSED_PAWN_TABLE[64],
-    int& DOUBLED_PAWNS_PENALTY, int& WEAK_PAWN_PENALTY, int& C_PAWN_PENALTY,
-    int PIECE_VALUES[7]
-);
-int trainEvalKnight( 
-    int sq, int color, 
-    int KNIGHT_TABLE[64], int& KNIGHT_MOBILITY, 
-    int& KNIGHT_PAWN_CONST, int& TRAPPED_KNIGHT_PENALTY, int& BLOCKING_C_KNIGHT, int& KNIGHT_DEF_BY_PAWN,
-    int PIECE_VALUES[7], int PIECE_ATTACK_WEIGHT[6]
-);
-int trainEvalBishop(
-    int sq, int color, 
-    int BISHOP_TABLE[64], int& TRAPPED_BISHOP_PENALTY, 
-    int& BLOCKED_BISHOP_PENALTY, int& FIANCHETTO_BONUS, int& BISHOP_MOBILITY,
-    int PIECE_VALUES[7], int PIECE_ATTACK_WEIGHT[6]
-);
-int trainEvalRook(
-    int sq, int color, 
-    int ROOK_TABLE[64], int& BLOCKED_ROOK_PENALTY,
-    int& ROOK_PAWN_CONST, int& ROOK_ON_OPEN_FILE, int& ROOK_ON_SEVENTH, int& ROOKS_DEF_EACH_OTHER,
-    int& ROOK_ON_QUEEN_FILE, int& ROOK_MOBILITY,
-    int PIECE_VALUES[7], int PIECE_ATTACK_WEIGHT[6]
-);
-int trainEvalQueen(
-    int sq, int color, 
-    int QUEEN_TABLE[64], int& EARLY_QUEEN_DEVELOPMENT,
-    int& QUEEN_MOBILITY, int PIECE_VALUES[7], int PIECE_ATTACK_WEIGHT[6]
-);
-int trainEvalPawnStructure(
-    bool useHash,
-    int MG_PAWN_TABLE[64], int EG_PAWN_TABLE[64], int PASSED_PAWN_TABLE[64],
-    int& DOUBLED_PAWNS_PENALTY, int& WEAK_PAWN_PENALTY, int& C_PAWN_PENALTY,
-    int PIECE_VALUES[7]
-);
+double trainEvalPawn(int sq, int color);
+double trainEvalKnight(int sq, int color);
+double trainEvalBishop(int sq, int color);
+double trainEvalRook(int sq, int color);
+double trainEvalQueen(int sq, int color);
+double trainEvalPawnStructure(bool useHash);
 
-int trainWhiteKingShield(int KING_SHIELD[3]), trainBlackKingShield(int KING_SHIELD[3]);
+double trainWhiteKingShield(), trainBlackKingShield();
 
-int trainEvaluate(
-    bool usePawnHash,
-
-    int MG_KING_TABLE[64], int EG_KING_TABLE[64],
-    int QUEEN_TABLE[64], int ROOK_TABLE[64], int BISHOP_TABLE[64], 
-    int KNIGHT_TABLE[64], int MG_PAWN_TABLE[64], int EG_PAWN_TABLE[64], int PASSED_PAWN_TABLE[64],
-
-    int KING_SHIELD[3], int PIECE_VALUES[7], int PIECE_ATTACK_WEIGHT[6],
-
-    int& KNIGHT_MOBILITY, int& KNIGHT_PAWN_CONST, int& TRAPPED_KNIGHT_PENALTY,
-    int& KNIGHT_DEF_BY_PAWN, int& BLOCKING_C_KNIGHT, int& KNIGHT_PAIR_PENALTY, 
-
-    int& BISHOP_PAIR, int& TRAPPED_BISHOP_PENALTY, int& FIANCHETTO_BONUS, 
-    int& BISHOP_MOBILITY, int& BLOCKED_BISHOP_PENALTY,
-
-    int& ROOK_ON_QUEEN_FILE, int& ROOK_ON_OPEN_FILE, int& ROOK_PAWN_CONST,
-    int& ROOK_ON_SEVENTH, int& ROOKS_DEF_EACH_OTHER, int& ROOK_MOBILITY,
-    int& BLOCKED_ROOK_PENALTY,
-
-    int& EARLY_QUEEN_DEVELOPMENT, int& QUEEN_MOBILITY,
-
-    int& DOUBLED_PAWNS_PENALTY, int& WEAK_PAWN_PENALTY, int& C_PAWN_PENALTY,
-
-    int& TEMPO_BONUS
-    ) {
+double trainEvaluate(bool usePawnHash) {
     // set gradients vector to 0
     for(int i = 0; i < NUM_PARAMS; i++) gradients[i] = 0;
 
@@ -156,46 +104,29 @@ int trainEvaluate(
     trainPieceMaterialWhite = trainPieceMaterialBlack = 0;
 
     // evaluate pieces independently
-    int res = 0;
+    double res = 0;
     for(int sq = 0; sq < 64; sq++) {
         if(board.squares[sq] == Empty) continue;
 
         int color = (board.squares[sq] & (Black | White));
         int c = (color == White ? 1 : -1);
 
-        if(board.knightsBB & bits[sq]) res += trainEvalKnight(
-            sq, color, KNIGHT_TABLE,
-            KNIGHT_MOBILITY, KNIGHT_PAWN_CONST, TRAPPED_KNIGHT_PENALTY, 
-            BLOCKING_C_KNIGHT, KNIGHT_DEF_BY_PAWN, PIECE_VALUES, PIECE_ATTACK_WEIGHT) * c;
+        if(board.knightsBB & bits[sq]) res += trainEvalKnight(sq, color) * c;
 
-        if(board.bishopsBB & bits[sq]) res += trainEvalBishop(
-            sq, color, BISHOP_TABLE, 
-            TRAPPED_BISHOP_PENALTY, BLOCKED_BISHOP_PENALTY, 
-            FIANCHETTO_BONUS, BISHOP_MOBILITY, PIECE_VALUES, PIECE_ATTACK_WEIGHT) * c;
+        if(board.bishopsBB & bits[sq]) res += trainEvalBishop(sq, color) * c;
 
-        if(board.rooksBB & bits[sq]) res += trainEvalRook(
-            sq, color, ROOK_TABLE, 
-            BLOCKED_ROOK_PENALTY,ROOK_PAWN_CONST, ROOK_ON_OPEN_FILE, 
-            ROOK_ON_SEVENTH, ROOKS_DEF_EACH_OTHER, ROOK_ON_QUEEN_FILE, ROOK_MOBILITY, 
-            PIECE_VALUES, PIECE_ATTACK_WEIGHT) * c;
+        if(board.rooksBB & bits[sq]) res += trainEvalRook(sq, color) * c;
 
-        if(board.queensBB & bits[sq]) res += trainEvalQueen(
-            sq, color, QUEEN_TABLE, EARLY_QUEEN_DEVELOPMENT,
-            QUEEN_MOBILITY, PIECE_VALUES, PIECE_ATTACK_WEIGHT) * c;
+        if(board.queensBB & bits[sq]) res += trainEvalQueen(sq, color) * c;
     }
-    res += trainEvalPawnStructure(
-        usePawnHash,
-        MG_PAWN_TABLE, EG_PAWN_TABLE, PASSED_PAWN_TABLE,
-        DOUBLED_PAWNS_PENALTY, WEAK_PAWN_PENALTY, C_PAWN_PENALTY,
-        PIECE_VALUES
-    );
+    res += trainEvalPawnStructure(usePawnHash);
 
     // evaluate kings based on the current game phase (king centralization becomes more important than safety as pieces disappear from the board)
     int mgWeight = min(trainGamePhase(), 24);
     int egWeight = 24-mgWeight;
 
-    int mgKingScore = trainWhiteKingShield(KING_SHIELD) - trainBlackKingShield(KING_SHIELD);
-    int egKingScore = 0;
+    double mgKingScore = trainWhiteKingShield() - trainBlackKingShield();
+    double egKingScore = 0;
 
     // evaluate king safety in the middlegame
 
@@ -204,9 +135,10 @@ int trainEvaluate(
     if(trainBlackAttackersCnt <= 2) trainBlackAttackWeight = 0;
 
     mgKingScore += TRAIN_KING_SAFETY_TABLE[trainWhiteAttackWeight] - TRAIN_KING_SAFETY_TABLE[trainBlackAttackWeight];
-    mgKingScore += MG_KING_TABLE[board.whiteKingSquare] - MG_KING_TABLE[TRAIN_FLIPPED[board.blackKingSquare]];    
-
-    egKingScore += EG_KING_TABLE[board.whiteKingSquare] - EG_KING_TABLE[TRAIN_FLIPPED[board.blackKingSquare]];
+    mgKingScore += params[MG_KING_TABLE_IDX + board.whiteKingSquare] - params[MG_KING_TABLE_IDX + TRAIN_FLIPPED[board.blackKingSquare]];
+    egKingScore += params[EG_KING_TABLE_IDX + board.whiteKingSquare] - params[EG_KING_TABLE_IDX + TRAIN_FLIPPED[board.blackKingSquare]];
+    // mgKingScore += MG_KING_TABLE[board.whiteKingSquare] - MG_KING_TABLE[TRAIN_FLIPPED[board.blackKingSquare]];    
+    // egKingScore += EG_KING_TABLE[board.whiteKingSquare] - EG_KING_TABLE[TRAIN_FLIPPED[board.blackKingSquare]];
 
     res += (mgWeight * mgKingScore + egWeight * egKingScore) / 24;
 
@@ -221,19 +153,25 @@ int trainEvaluate(
     freq[EG_KING_TABLE_IDX + TRAIN_FLIPPED[board.blackKingSquare]] += (egWeight > 0 ? 1 : 0);
 
     // tempo bonus
-    if(board.turn == White) res += TEMPO_BONUS;
-    else res -= TEMPO_BONUS;
+    res += (board.turn == White ? params[TEMPO_BONUS_IDX] : -params[TEMPO_BONUS_IDX]);
+    // if(board.turn == White) res += TEMPO_BONUS;
+    // else res -= TEMPO_BONUS;
 
     // --- UPDATE GRADIENTS ---
     gradients[TEMPO_BONUS_IDX] += (board.turn == White ? 1 : -1);
     freq[TEMPO_BONUS_IDX] += 1;
 
     // add scores for bishop and knight pairs
-    if(popcount(board.whitePiecesBB & board.bishopsBB) >= 2) res += BISHOP_PAIR;
-    if(popcount(board.blackPiecesBB & board.bishopsBB) >= 2) res -= BISHOP_PAIR;
+    if(popcount(board.whitePiecesBB & board.bishopsBB) >= 2) res += params[BISHOP_PAIR_IDX];
+    if(popcount(board.blackPiecesBB & board.bishopsBB) >= 2) res -= params[BISHOP_PAIR_IDX];
 
-    if(popcount(board.whitePiecesBB & board.knightsBB) >= 2) res -= KNIGHT_PAIR_PENALTY;
-    if(popcount(board.blackPiecesBB & board.knightsBB) >= 2) res += KNIGHT_PAIR_PENALTY;
+    if(popcount(board.whitePiecesBB & board.knightsBB) >= 2) res -= params[KNIGHT_PAIR_PENALTY_IDX];
+    if(popcount(board.blackPiecesBB & board.knightsBB) >= 2) res += params[KNIGHT_PAIR_PENALTY_IDX];
+    // if(popcount(board.whitePiecesBB & board.bishopsBB) >= 2) res += BISHOP_PAIR;
+    // if(popcount(board.blackPiecesBB & board.bishopsBB) >= 2) res -= BISHOP_PAIR;
+
+    // if(popcount(board.whitePiecesBB & board.knightsBB) >= 2) res -= KNIGHT_PAIR_PENALTY;
+    // if(popcount(board.blackPiecesBB & board.knightsBB) >= 2) res += KNIGHT_PAIR_PENALTY;
 
     // --- UPDATE GRADIENTS ---
     gradients[BISHOP_PAIR_IDX] += (popcount(board.whitePiecesBB & board.bishopsBB) >= 2 ? 1 : 0);
@@ -248,8 +186,8 @@ int trainEvaluate(
     // low material corrections (adjusting the score for well known draws)
 
     int strongerSide = White, weakerSide = Black;
-    int strongerPawns = trainPawnCntWhite, weakerPawns = trainPawnCntBlack;
-    int strongerPieces = trainPieceMaterialWhite, weakerPieces = trainPieceMaterialBlack;
+    double strongerPawns = trainPawnCntWhite, weakerPawns = trainPawnCntBlack;
+    double strongerPieces = trainPieceMaterialWhite, weakerPieces = trainPieceMaterialBlack;
     if(res < 0) {
         swap(strongerSide, weakerSide);
         swap(strongerPieces, weakerPieces);
@@ -259,27 +197,27 @@ int trainEvaluate(
     if(strongerPawns == 0) {
         // weaker side cannot be checkmated
         if(strongerPieces < 400) return 0;
-        if(weakerPawns == 0 && weakerPieces == 2*PIECE_VALUES[Knight]) return 0;
+        // if(weakerPawns == 0 && weakerPieces == 2*PIECE_VALUES[Knight]) return 0;
+        if (weakerPawns == 0 && weakerPieces == 2 * params[PIECE_VALUES_IDX + Knight]) return 0;
 
         // rook vs minor piece
-        if(strongerPieces == PIECE_VALUES[Rook] && (weakerPieces == PIECE_VALUES[Knight] || weakerPieces == PIECE_VALUES[Bishop]) )
+        if(strongerPieces == params[PIECE_VALUES_IDX + Rook] && (weakerPieces == params[PIECE_VALUES_IDX + Knight] || weakerPieces == params[PIECE_VALUES_IDX + Bishop]))
             res /= 2;
+        // if(strongerPieces == PIECE_VALUES[Rook] && (weakerPieces == PIECE_VALUES[Knight] || weakerPieces == PIECE_VALUES[Bishop]) )
+        //     res /= 2;
 
         // rook and minor vs rook
-        if((strongerPieces == PIECE_VALUES[Rook] + PIECE_VALUES[Bishop] || strongerPieces == PIECE_VALUES[Rook] + PIECE_VALUES[Knight])
-           && weakerPieces == PIECE_VALUES[Rook])
+        if((strongerPieces == params[PIECE_VALUES_IDX + Rook] + params[PIECE_VALUES_IDX + Knight]) || (strongerPieces == params[PIECE_VALUES_IDX + Rook] + params[PIECE_VALUES_IDX + Bishop]))
             res /= 2;
+        // if((strongerPieces == PIECE_VALUES[Rook] + PIECE_VALUES[Bishop] || strongerPieces == PIECE_VALUES[Rook] + PIECE_VALUES[Knight])
+        //    && weakerPieces == PIECE_VALUES[Rook])
+        //     res /= 2;
     }
 
     return res;
 }
 
-int trainEvalKnight( 
-    int sq, int color, 
-    int KNIGHT_TABLE[64], int& KNIGHT_MOBILITY, 
-    int& KNIGHT_PAWN_CONST, int& TRAPPED_KNIGHT_PENALTY, int& BLOCKING_C_KNIGHT, int& KNIGHT_DEF_BY_PAWN,
-    int PIECE_VALUES[7], int PIECE_ATTACK_WEIGHT[6]
-) {
+double trainEvalKnight(int sq, int color) {
     U64 opponentPawnsBB = (board.pawnsBB & (color == White ? board.blackPiecesBB : board.whitePiecesBB));
     U64 ourPawnsBB = (board.pawnsBB ^ opponentPawnsBB);
     U64 ourPiecesBB = (color == White ? board.whitePiecesBB : board.blackPiecesBB);
@@ -287,54 +225,88 @@ int trainEvalKnight(
     U64 ourPawnAttacksBB = pawnAttacks(ourPawnsBB, color);
     U64 opponentPawnAttacksBB = pawnAttacks(opponentPawnsBB, (color ^ (White | Black)));
 
-    if(color == White) trainPieceMaterialWhite += PIECE_VALUES[Knight];
-    else trainPieceMaterialBlack += PIECE_VALUES[Knight];
+    if(color == White) trainPieceMaterialWhite += params[PIECE_VALUES_IDX + Knight];
+    else trainPieceMaterialBlack += params[PIECE_VALUES_IDX + Knight];
+    // if(color == White) trainPieceMaterialWhite += PIECE_VALUES[Knight];
+    // else trainPieceMaterialBlack += PIECE_VALUES[Knight];
 
     // initial piece value and square value
-    int eval = PIECE_VALUES[Knight] + KNIGHT_TABLE[(color == White ? sq : TRAIN_FLIPPED[sq])];
+    double eval = params[PIECE_VALUES_IDX + Knight] + params[KNIGHT_TABLE_IDX + (color == White ? sq : TRAIN_FLIPPED[sq])];
+    // int eval = PIECE_VALUES[Knight] + KNIGHT_TABLE[(color == White ? sq : TRAIN_FLIPPED[sq])];
 
 
     // mobility bonus
     U64 mob = (knightAttacksBB[sq] ^ (knightAttacksBB[sq] & (ourPiecesBB | opponentPawnAttacksBB)));
-    eval += KNIGHT_MOBILITY * (popcount(mob) - 4);
+    eval += params[KNIGHT_MOBILITY_IDX] * (popcount(mob) - 4);
+    // eval += KNIGHT_MOBILITY * (popcount(mob) - 4);
 
     // decreasing value as pawns disappear
     int numberOfPawns = popcount(board.pawnsBB);
-    eval += KNIGHT_PAWN_CONST * (numberOfPawns - 8);
+    eval += params[KNIGHT_PAWN_CONST_IDX] * (numberOfPawns - 8);
+    // eval += KNIGHT_PAWN_CONST * (numberOfPawns - 8);
 
     // traps and blockages
     if(color == White) {
         if(sq == a8 && (opponentPawnsBB & (bits[a7] | bits[c7])))
-           eval -= TRAPPED_KNIGHT_PENALTY;
+           eval -= params[TRAPPED_KNIGHT_PENALTY_IDX];
         if(sq == a7 && (opponentPawnsBB & (bits[a6] | bits[c6])) && (opponentPawnsBB & (bits[b7] | bits[d7])))
-            eval -= TRAPPED_KNIGHT_PENALTY;
-
+            eval -= params[TRAPPED_KNIGHT_PENALTY_IDX];
+        
         if(sq == h8 && (opponentPawnsBB & (bits[h7] | bits[f7])))
-           eval -= TRAPPED_KNIGHT_PENALTY;
+           eval -= params[TRAPPED_KNIGHT_PENALTY_IDX];
         if(sq == h7 && (opponentPawnsBB & (bits[f6] | bits[h6])) && (opponentPawnsBB & (bits[e7] | bits[g7])))
-            eval -= TRAPPED_KNIGHT_PENALTY;
-
+            eval -= params[TRAPPED_KNIGHT_PENALTY_IDX];
+        
         if(sq == c3 && (ourPawnsBB & bits[c2]) && (ourPawnsBB & bits[d4]) && !(ourPawnsBB & bits[e4]))
-            eval -= BLOCKING_C_KNIGHT;
-    }
+            eval -= params[BLOCKING_C_KNIGHT_IDX];
+    } 
     if(color == Black) {
         if(sq == a1 && (opponentPawnsBB & (bits[a2] | bits[c2])))
-           eval -= TRAPPED_KNIGHT_PENALTY;
+           eval -= params[TRAPPED_KNIGHT_PENALTY_IDX];
         if(sq == a2 && (opponentPawnsBB & (bits[a3] | bits[c3])) && (opponentPawnsBB & (bits[b2] | bits[d2])))
-            eval -= TRAPPED_KNIGHT_PENALTY;
-
+            eval -= params[TRAPPED_KNIGHT_PENALTY_IDX];
+        
         if(sq == h1 && (opponentPawnsBB & (bits[h2] | bits[f2])))
-           eval -= TRAPPED_KNIGHT_PENALTY;
+           eval -= params[TRAPPED_KNIGHT_PENALTY_IDX];
         if(sq == h2 && (opponentPawnsBB & (bits[f3] | bits[h3])) && (opponentPawnsBB & (bits[e2] | bits[g2])))
-            eval -= TRAPPED_KNIGHT_PENALTY;
-
+            eval -= params[TRAPPED_KNIGHT_PENALTY_IDX];
+        
         if(sq == c6 && (ourPawnsBB & bits[c7]) && (ourPawnsBB & bits[d5]) && !(ourPawnsBB & bits[e5]))
-            eval -= BLOCKING_C_KNIGHT;
-    }
+            eval -= params[BLOCKING_C_KNIGHT_IDX];
+    } 
+    // if(color == White) {
+    //     if(sq == a8 && (opponentPawnsBB & (bits[a7] | bits[c7])))
+    //        eval -= TRAPPED_KNIGHT_PENALTY;
+    //     if(sq == a7 && (opponentPawnsBB & (bits[a6] | bits[c6])) && (opponentPawnsBB & (bits[b7] | bits[d7])))
+    //         eval -= TRAPPED_KNIGHT_PENALTY;
+
+    //     if(sq == h8 && (opponentPawnsBB & (bits[h7] | bits[f7])))
+    //        eval -= TRAPPED_KNIGHT_PENALTY;
+    //     if(sq == h7 && (opponentPawnsBB & (bits[f6] | bits[h6])) && (opponentPawnsBB & (bits[e7] | bits[g7])))
+    //         eval -= TRAPPED_KNIGHT_PENALTY;
+
+    //     if(sq == c3 && (ourPawnsBB & bits[c2]) && (ourPawnsBB & bits[d4]) && !(ourPawnsBB & bits[e4]))
+    //         eval -= BLOCKING_C_KNIGHT;
+    // }
+    // if(color == Black) {
+    //     if(sq == a1 && (opponentPawnsBB & (bits[a2] | bits[c2])))
+    //        eval -= TRAPPED_KNIGHT_PENALTY;
+    //     if(sq == a2 && (opponentPawnsBB & (bits[a3] | bits[c3])) && (opponentPawnsBB & (bits[b2] | bits[d2])))
+    //         eval -= TRAPPED_KNIGHT_PENALTY;
+
+    //     if(sq == h1 && (opponentPawnsBB & (bits[h2] | bits[f2])))
+    //        eval -= TRAPPED_KNIGHT_PENALTY;
+    //     if(sq == h2 && (opponentPawnsBB & (bits[f3] | bits[h3])) && (opponentPawnsBB & (bits[e2] | bits[g2])))
+    //         eval -= TRAPPED_KNIGHT_PENALTY;
+
+    //     if(sq == c6 && (ourPawnsBB & bits[c7]) && (ourPawnsBB & bits[d5]) && !(ourPawnsBB & bits[e5]))
+    //         eval -= BLOCKING_C_KNIGHT;
+    // }
 
     // bonus if defended by pawns
-    if(ourPawnAttacksBB & bits[sq])
-        eval += KNIGHT_DEF_BY_PAWN;
+    if(ourPawnAttacksBB & bits[sq]) eval += params[KNIGHT_DEF_BY_PAWN_IDX];
+    // if(ourPawnAttacksBB & bits[sq])
+    //     eval += KNIGHT_DEF_BY_PAWN;
 
     // attacks
     U64 sqNearKing = (color == White ? squaresNearBlackKing[board.blackKingSquare] : squaresNearWhiteKing[board.whiteKingSquare]);
@@ -343,10 +315,12 @@ int trainEvalKnight(
     if(attackedSquares) {
         if(color == White) {
             trainWhiteAttackersCnt++;
-            trainWhiteAttackWeight += PIECE_ATTACK_WEIGHT[Knight] * attackedSquares;
+            // trainWhiteAttackWeight += PIECE_ATTACK_WEIGHT[Knight] * attackedSquares;
+            trainWhiteAttackWeight += round(params[PIECE_ATTACK_WEIGHT_IDX + Knight] * attackedSquares);
         } else {
             trainBlackAttackersCnt++;
-            trainBlackAttackWeight += PIECE_ATTACK_WEIGHT[Knight] * attackedSquares;
+            // trainBlackAttackWeight += PIECE_ATTACK_WEIGHT[Knight] * attackedSquares;
+            trainBlackAttackWeight += round(params[PIECE_ATTACK_WEIGHT_IDX + Knight] * attackedSquares);
         }
     }
 
@@ -415,12 +389,7 @@ int trainEvalKnight(
     return eval;
 }
 
-int trainEvalBishop(
-    int sq, int color, 
-    int BISHOP_TABLE[64], int& TRAPPED_BISHOP_PENALTY, 
-    int& BLOCKED_BISHOP_PENALTY, int& FIANCHETTO_BONUS, int& BISHOP_MOBILITY,
-    int PIECE_VALUES[7], int PIECE_ATTACK_WEIGHT[6]
-) {
+double trainEvalBishop(int sq, int color) {
     U64 ourPawnsBB = (board.whitePiecesBB & board.pawnsBB);
     U64 opponentPawnsBB = (board.blackPiecesBB & board.pawnsBB);
     if(color == Black) swap(ourPawnsBB, opponentPawnsBB);
@@ -432,41 +401,70 @@ int trainEvalBishop(
 
     int opponentKingSquare = (color == White ? board.blackKingSquare : board.whiteKingSquare);
 
-    if(color == White) trainPieceMaterialWhite += PIECE_VALUES[Bishop];
-    else trainPieceMaterialBlack += PIECE_VALUES[Bishop];
+    // if(color == White) trainPieceMaterialWhite += PIECE_VALUES[Bishop];
+    // else trainPieceMaterialBlack += PIECE_VALUES[Bishop];
+    if(color == White) trainPieceMaterialWhite += params[PIECE_VALUES_IDX + Bishop];
+    else trainPieceMaterialBlack += params[PIECE_VALUES_IDX + Bishop];
 
     // initial piece value and square value
-    int eval = PIECE_VALUES[Bishop] + BISHOP_TABLE[(color == White ? sq : TRAIN_FLIPPED[sq])];
+    // int eval = PIECE_VALUES[Bishop] + BISHOP_TABLE[(color == White ? sq : TRAIN_FLIPPED[sq])];
+    double eval = params[PIECE_VALUES_IDX + Bishop] + params[BISHOP_TABLE_IDX + (color == White ? sq : TRAIN_FLIPPED[sq])];
 
     // traps and blockages
+    // if(color == White) {
+    //     if(sq == a7 && (opponentPawnsBB & bits[b6]) && (opponentPawnsBB & bits[c7]))
+    //         eval -= TRAPPED_BISHOP_PENALTY;
+    //     if(sq == h7 && (opponentPawnsBB & bits[g6]) && (opponentPawnsBB & bits[f7]))
+    //         eval -= TRAPPED_BISHOP_PENALTY;
+
+    //     if(sq == c1 && (ourPawnsBB & bits[d2]) & (ourPiecesBB & bits[e3]))
+    //         eval -= BLOCKED_BISHOP_PENALTY;
+    //     if(sq == f1 && (ourPawnsBB & bits[e2]) & (ourPiecesBB & bits[d3]))
+    //         eval -= BLOCKED_BISHOP_PENALTY;
+    // }
+    // if(color == Black) {
+    //     if(sq == a2 && (opponentPawnsBB & bits[b3]) && (opponentPawnsBB & bits[c2]))
+    //         eval -= TRAPPED_BISHOP_PENALTY;
+    //     if(sq == h2 && (opponentPawnsBB & bits[g3]) && (opponentPawnsBB & bits[f2]))
+    //         eval -= TRAPPED_BISHOP_PENALTY;
+
+    //     if(sq == c8 && (ourPawnsBB & bits[d7]) & (ourPiecesBB & bits[e6]))
+    //         eval -= BLOCKED_BISHOP_PENALTY;
+    //     if(sq == f8 && (ourPawnsBB & bits[e7]) & (ourPiecesBB & bits[d6]))
+    //         eval -= BLOCKED_BISHOP_PENALTY;
+    // }
     if(color == White) {
         if(sq == a7 && (opponentPawnsBB & bits[b6]) && (opponentPawnsBB & bits[c7]))
-            eval -= TRAPPED_BISHOP_PENALTY;
+            eval -= params[TRAPPED_BISHOP_PENALTY_IDX];
         if(sq == h7 && (opponentPawnsBB & bits[g6]) && (opponentPawnsBB & bits[f7]))
-            eval -= TRAPPED_BISHOP_PENALTY;
-
+            eval -= params[TRAPPED_BISHOP_PENALTY_IDX];
+        
         if(sq == c1 && (ourPawnsBB & bits[d2]) & (ourPiecesBB & bits[e3]))
-            eval -= BLOCKED_BISHOP_PENALTY;
+            eval -= params[BLOCKED_BISHOP_PENALTY_IDX];
         if(sq == f1 && (ourPawnsBB & bits[e2]) & (ourPiecesBB & bits[d3]))
-            eval -= BLOCKED_BISHOP_PENALTY;
+            eval -= params[BLOCKED_BISHOP_PENALTY_IDX];
     }
     if(color == Black) {
         if(sq == a2 && (opponentPawnsBB & bits[b3]) && (opponentPawnsBB & bits[c2]))
-            eval -= TRAPPED_BISHOP_PENALTY;
+            eval -= params[TRAPPED_BISHOP_PENALTY_IDX];
         if(sq == h2 && (opponentPawnsBB & bits[g3]) && (opponentPawnsBB & bits[f2]))
-            eval -= TRAPPED_BISHOP_PENALTY;
+            eval -= params[TRAPPED_BISHOP_PENALTY_IDX];
 
         if(sq == c8 && (ourPawnsBB & bits[d7]) & (ourPiecesBB & bits[e6]))
-            eval -= BLOCKED_BISHOP_PENALTY;
+            eval -= params[BLOCKED_BISHOP_PENALTY_IDX];
         if(sq == f8 && (ourPawnsBB & bits[e7]) & (ourPiecesBB & bits[d6]))
-            eval -= BLOCKED_BISHOP_PENALTY;
+            eval -= params[BLOCKED_BISHOP_PENALTY_IDX];
     }
 
     // fianchetto bonus (bishop on long diagonal on the second rank)
-    if(color == White && sq == g2 && (ourPawnsBB & bits[g3]) && (ourPawnsBB & bits[f2])) eval += FIANCHETTO_BONUS;
-    if(color == White && sq == b2 && (ourPawnsBB & bits[b3]) && (ourPawnsBB & bits[c2])) eval += FIANCHETTO_BONUS;
-    if(color == Black && sq == g7 && (ourPawnsBB & bits[g6]) && (ourPawnsBB & bits[f7])) eval += FIANCHETTO_BONUS;
-    if(color == Black && sq == b7 && (ourPawnsBB & bits[b6]) && (ourPawnsBB & bits[c7])) eval += FIANCHETTO_BONUS;
+    if(color == White && sq == g2 && (ourPawnsBB & bits[g3]) && (ourPawnsBB & bits[f2])) eval += params[FIANCHETTO_BONUS_IDX];
+    if(color == White && sq == b2 && (ourPawnsBB & bits[b3]) && (ourPawnsBB & bits[c2])) eval += params[FIANCHETTO_BONUS_IDX];
+    if(color == Black && sq == g7 && (ourPawnsBB & bits[g6]) && (ourPawnsBB & bits[f7])) eval += params[FIANCHETTO_BONUS_IDX];
+    if(color == Black && sq == b7 && (ourPawnsBB & bits[b6]) && (ourPawnsBB & bits[c7])) eval += params[FIANCHETTO_BONUS_IDX];
+    // if(color == White && sq == g2 && (ourPawnsBB & bits[g3]) && (ourPawnsBB & bits[f2])) eval += FIANCHETTO_BONUS;
+    // if(color == White && sq == b2 && (ourPawnsBB & bits[b3]) && (ourPawnsBB & bits[c2])) eval += FIANCHETTO_BONUS;
+    // if(color == Black && sq == g7 && (ourPawnsBB & bits[g6]) && (ourPawnsBB & bits[f7])) eval += FIANCHETTO_BONUS;
+    // if(color == Black && sq == b7 && (ourPawnsBB & bits[b6]) && (ourPawnsBB & bits[c7])) eval += FIANCHETTO_BONUS;
 
     // mobility and attacks
     U64 sqNearKing = (color == White ? squaresNearBlackKing[board.blackKingSquare] : squaresNearWhiteKing[board.whiteKingSquare]);
@@ -475,14 +473,17 @@ int trainEvalBishop(
     int mobility = popcount(attacks & ~ourPiecesBB & ~opponentPawnAttacksBB);
     int attackedSquares = popcount(attacks & sqNearKing);
 
-    eval += BISHOP_MOBILITY * (mobility-5);
+    eval += params[BISHOP_MOBILITY_IDX] * (mobility-5);
+    // eval += BISHOP_MOBILITY * (mobility-5);
     if(attackedSquares) {
         if(color == White) {
             trainWhiteAttackersCnt++;
-            trainWhiteAttackWeight += PIECE_ATTACK_WEIGHT[Bishop] * attackedSquares;
+            trainWhiteAttackWeight += round(params[PIECE_ATTACK_WEIGHT_IDX + Bishop] * attackedSquares);
+            // trainWhiteAttackWeight += PIECE_ATTACK_WEIGHT[Bishop] * attackedSquares;
         } else {
             trainBlackAttackersCnt++;
-            trainBlackAttackWeight += PIECE_ATTACK_WEIGHT[Bishop] * attackedSquares;
+            trainBlackAttackWeight += round(params[PIECE_ATTACK_WEIGHT_IDX + Bishop] * attackedSquares);
+            // trainBlackAttackWeight += PIECE_ATTACK_WEIGHT[Bishop] * attackedSquares;
         }
     }
 
@@ -556,13 +557,7 @@ int trainEvalBishop(
     return eval;
 }
 
-int trainEvalRook(
-    int sq, int color, 
-    int ROOK_TABLE[64], int& BLOCKED_ROOK_PENALTY,
-    int& ROOK_PAWN_CONST, int& ROOK_ON_OPEN_FILE, int& ROOK_ON_SEVENTH, int& ROOKS_DEF_EACH_OTHER,
-    int& ROOK_ON_QUEEN_FILE, int& ROOK_MOBILITY,
-    int PIECE_VALUES[7], int PIECE_ATTACK_WEIGHT[6]
-) {
+double trainEvalRook(int sq, int color) {
     U64 currFileBB = filesBB[sq%8];
     U64 currRankBB = ranksBB[sq/8];
 
@@ -580,49 +575,72 @@ int trainEvalRook(
     int seventhRank = (color == White ? 6 : 1);
     int eighthRank = (color == White ? 7 : 0);
 
-    if(color == White) trainPieceMaterialWhite += PIECE_VALUES[Rook];
-    else trainPieceMaterialBlack += PIECE_VALUES[Rook];
+    if(color == White) trainPieceMaterialWhite += params[PIECE_VALUES_IDX + Rook];
+    else trainPieceMaterialBlack += params[PIECE_VALUES_IDX + Rook];
+    // if(color == White) trainPieceMaterialWhite += PIECE_VALUES[Rook];
+    // else trainPieceMaterialBlack += PIECE_VALUES[Rook];
 
     // initial piece value and square value
-    int eval = PIECE_VALUES[Rook] + ROOK_TABLE[(color == White ? sq : TRAIN_FLIPPED[sq])];
+    double eval = params[PIECE_VALUES_IDX + Rook] + params[ROOK_TABLE_IDX + (color == White ? sq : TRAIN_FLIPPED[sq])];
+    // int eval = PIECE_VALUES[Rook] + ROOK_TABLE[(color == White ? sq : TRAIN_FLIPPED[sq])];
 
     // blocked by uncastled king
+    // if(color == White) {
+    //     if((board.whiteKingSquare == f1 || board.whiteKingSquare == g1) && (sq == g1 || sq == h1))
+    //         eval -= BLOCKED_ROOK_PENALTY;
+    //     if((board.whiteKingSquare == c1 || board.whiteKingSquare == b1) && (sq == a1 || sq == b1))
+    //         eval -= BLOCKED_ROOK_PENALTY;
+    // }
+    // if(color == Black) {
+    //     if((board.whiteKingSquare == f8 || board.whiteKingSquare == g8) && (sq == g8 || sq == h8))
+    //         eval -= BLOCKED_ROOK_PENALTY;
+    //     if((board.whiteKingSquare == c8 || board.whiteKingSquare == b8) && (sq == a8 || sq == b8))
+    //         eval -= BLOCKED_ROOK_PENALTY;
+    // }
     if(color == White) {
         if((board.whiteKingSquare == f1 || board.whiteKingSquare == g1) && (sq == g1 || sq == h1))
-            eval -= BLOCKED_ROOK_PENALTY;
+            eval -= params[BLOCKED_ROOK_PENALTY_IDX];
         if((board.whiteKingSquare == c1 || board.whiteKingSquare == b1) && (sq == a1 || sq == b1))
-            eval -= BLOCKED_ROOK_PENALTY;
+            eval -= params[BLOCKED_ROOK_PENALTY_IDX];
     }
     if(color == Black) {
         if((board.whiteKingSquare == f8 || board.whiteKingSquare == g8) && (sq == g8 || sq == h8))
-            eval -= BLOCKED_ROOK_PENALTY;
+            eval -= params[BLOCKED_ROOK_PENALTY_IDX];
         if((board.whiteKingSquare == c8 || board.whiteKingSquare == b8) && (sq == a8 || sq == b8))
-            eval -= BLOCKED_ROOK_PENALTY;
+            eval -= params[BLOCKED_ROOK_PENALTY_IDX];
     }
 
     // the rook becomes more valuable as there are less pawns on the board
     int numberOfPawns = popcount(board.pawnsBB);
-    eval += ROOK_PAWN_CONST * (8 - numberOfPawns);
+    eval += params[ROOK_PAWN_CONST_IDX] * (8 - numberOfPawns);
+    // eval += ROOK_PAWN_CONST * (8 - numberOfPawns);
 
     // bonus for a rook on an open or semi open file
     bool ourBlockingPawns = (currFileBB & ourPawnsBB);
     bool opponentBlockingPawns = (currFileBB & opponentPawnsBB);
 
+    // if(!ourBlockingPawns) {
+    //     if(opponentBlockingPawns) eval += ROOK_ON_OPEN_FILE/2; // semi open file
+    //     else eval += ROOK_ON_OPEN_FILE; // open file
+    // }
     if(!ourBlockingPawns) {
-        if(opponentBlockingPawns) eval += ROOK_ON_OPEN_FILE/2; // semi open file
-        else eval += ROOK_ON_OPEN_FILE; // open file
+        if(opponentBlockingPawns) eval += params[ROOK_ON_OPEN_FILE_IDX] / 2;
+        else eval += params[ROOK_ON_OPEN_FILE_IDX];
     }
 
     // the rook on the seventh rank gets a huge bonus if there are pawns on that rank or if it restricts the king to the eighth rank
     if(sq/8 == seventhRank && (opponentKingSquare/8 == eighthRank || (opponentPawnsBB & ranksBB[seventhRank])))
-        eval += ROOK_ON_SEVENTH;
+        // eval += ROOK_ON_SEVENTH;
+        eval += params[ROOK_ON_SEVENTH_IDX];
 
     // small bonus if the rook is defended by another rook
     if((board.rooksBB & ourPiecesBB & (currRankBB | currFileBB)) ^ bits[sq])
-        eval += ROOKS_DEF_EACH_OTHER;
+        // eval += ROOKS_DEF_EACH_OTHER;
+        eval += params[ROOKS_DEF_EACH_OTHER_IDX];
 
     // bonus for a rook that is on the same file as the enemy queen
-    if(currFileBB & opponentPiecesBB & board.queensBB) eval += ROOK_ON_QUEEN_FILE;
+    // if(currFileBB & opponentPiecesBB & board.queensBB) eval += ROOK_ON_QUEEN_FILE;
+    if(currFileBB & opponentPiecesBB & board.queensBB) eval += params[ROOK_ON_QUEEN_FILE_IDX];
 
     // mobility and attacks
     U64 sqNearKing = (color == White ? squaresNearBlackKing[board.blackKingSquare] : squaresNearWhiteKing[board.whiteKingSquare]);
@@ -631,14 +649,17 @@ int trainEvalRook(
     int mobility = popcount(attacks & ~ourPiecesBB & ~opponentPawnAttacksBB);
     int attackedSquares = popcount(attacks & sqNearKing);
 
-    eval += ROOK_MOBILITY * (mobility-7);
+    // eval += ROOK_MOBILITY * (mobility-7);
+    eval += params[ROOK_MOBILITY_IDX] * (mobility-7);
     if(attackedSquares) {
         if(color == White) {
             trainWhiteAttackersCnt++;
-            trainWhiteAttackWeight += PIECE_ATTACK_WEIGHT[Rook] * attackedSquares;
+            trainWhiteAttackWeight += round(params[PIECE_ATTACK_WEIGHT_IDX + Rook] * attackedSquares);
+            // trainWhiteAttackWeight += PIECE_ATTACK_WEIGHT[Rook] * attackedSquares;
         } else {
             trainBlackAttackersCnt++;
-            trainBlackAttackWeight += PIECE_ATTACK_WEIGHT[Rook] * attackedSquares;
+            trainBlackAttackWeight += round(params[PIECE_ATTACK_WEIGHT_IDX + Rook] * attackedSquares);
+            // trainBlackAttackWeight += PIECE_ATTACK_WEIGHT[Rook] * attackedSquares;
         }
     }
 
@@ -690,11 +711,7 @@ int trainEvalRook(
     return eval;
 }
 
-int trainEvalQueen(
-    int sq, int color, 
-    int QUEEN_TABLE[64], int& EARLY_QUEEN_DEVELOPMENT, int& QUEEN_MOBILITY,
-    int PIECE_VALUES[7], int PIECE_ATTACK_WEIGHT[6]
-) {
+double trainEvalQueen(int sq, int color) {
     U64 ourPiecesBB = (color == White ? board.whitePiecesBB : board.blackPiecesBB);
     U64 opponentPiecesBB = (color == Black ? board.whitePiecesBB : board.blackPiecesBB);
     U64 ourBishopsBB = (board.bishopsBB & ourPiecesBB);
@@ -705,24 +722,39 @@ int trainEvalQueen(
 
     int opponentKingSquare = (color == Black ? board.whiteKingSquare : board.blackKingSquare);
 
-    if(color == White) trainPieceMaterialWhite += PIECE_VALUES[Queen];
-    else trainPieceMaterialBlack += PIECE_VALUES[Queen];
+    if(color == White) trainPieceMaterialWhite += params[PIECE_VALUES_IDX + Queen];
+    else trainPieceMaterialBlack += params[PIECE_VALUES_IDX + Queen];
+    // if(color == White) trainPieceMaterialWhite += PIECE_VALUES[Queen];
+    // else trainPieceMaterialBlack += PIECE_VALUES[Queen];
 
     // initial piece value and square value
-    int eval = PIECE_VALUES[Queen] + QUEEN_TABLE[(color == White ? sq : TRAIN_FLIPPED[sq])];
+    double eval = params[PIECE_VALUES_IDX + Queen] + params[QUEEN_TABLE_IDX + (color == White ? sq : TRAIN_FLIPPED[sq])];
+    // int eval = PIECE_VALUES[Queen] + QUEEN_TABLE[(color == White ? sq : TRAIN_FLIPPED[sq])];
 
     // penalty for early development
+    // if(color == White && sq/8 > 1) {
+    //     if(ourKnightsBB & bits[b1]) eval -= EARLY_QUEEN_DEVELOPMENT;
+    //     if(ourBishopsBB & bits[c1]) eval -= EARLY_QUEEN_DEVELOPMENT;
+    //     if(ourBishopsBB & bits[f1]) eval -= EARLY_QUEEN_DEVELOPMENT;
+    //     if(ourKnightsBB & bits[g1]) eval -= EARLY_QUEEN_DEVELOPMENT;
+    // }
+    // if(color == Black && sq/8 < 6) {
+    //     if(ourKnightsBB & bits[b8]) eval -= EARLY_QUEEN_DEVELOPMENT;
+    //     if(ourBishopsBB & bits[c8]) eval -= EARLY_QUEEN_DEVELOPMENT;
+    //     if(ourBishopsBB & bits[f8]) eval -= EARLY_QUEEN_DEVELOPMENT;
+    //     if(ourKnightsBB & bits[g8]) eval -= EARLY_QUEEN_DEVELOPMENT;
+    // }
     if(color == White && sq/8 > 1) {
-        if(ourKnightsBB & bits[b1]) eval -= EARLY_QUEEN_DEVELOPMENT;
-        if(ourBishopsBB & bits[c1]) eval -= EARLY_QUEEN_DEVELOPMENT;
-        if(ourBishopsBB & bits[f1]) eval -= EARLY_QUEEN_DEVELOPMENT;
-        if(ourKnightsBB & bits[g1]) eval -= EARLY_QUEEN_DEVELOPMENT;
+        if(ourKnightsBB & bits[b1]) eval -= params[EARLY_QUEEN_DEVELOPMENT_IDX];
+        if(ourBishopsBB & bits[c1]) eval -= params[EARLY_QUEEN_DEVELOPMENT_IDX];
+        if(ourBishopsBB & bits[f1]) eval -= params[EARLY_QUEEN_DEVELOPMENT_IDX];
+        if(ourKnightsBB & bits[g1]) eval -= params[EARLY_QUEEN_DEVELOPMENT_IDX];
     }
     if(color == Black && sq/8 < 6) {
-        if(ourKnightsBB & bits[b8]) eval -= EARLY_QUEEN_DEVELOPMENT;
-        if(ourBishopsBB & bits[c8]) eval -= EARLY_QUEEN_DEVELOPMENT;
-        if(ourBishopsBB & bits[f8]) eval -= EARLY_QUEEN_DEVELOPMENT;
-        if(ourKnightsBB & bits[g8]) eval -= EARLY_QUEEN_DEVELOPMENT;
+        if(ourKnightsBB & bits[b8]) eval -= params[EARLY_QUEEN_DEVELOPMENT_IDX];
+        if(ourBishopsBB & bits[c8]) eval -= params[EARLY_QUEEN_DEVELOPMENT_IDX];
+        if(ourBishopsBB & bits[f8]) eval -= params[EARLY_QUEEN_DEVELOPMENT_IDX];
+        if(ourKnightsBB & bits[g8]) eval -= params[EARLY_QUEEN_DEVELOPMENT_IDX];
     }
 
     // mobility and attacks
@@ -733,14 +765,17 @@ int trainEvalQueen(
     int mobility = popcount(attacks & ~ourPiecesBB & ~opponentPawnAttacksBB);
     int attackedSquares = popcount(attacks & sqNearKing);
 
-    eval += QUEEN_MOBILITY * (mobility-14);
+    // eval += QUEEN_MOBILITY * (mobility-14);
+    eval += params[QUEEN_MOBILITY_IDX] * (mobility-14);
     if(attackedSquares) {
         if(color == White) {
             trainWhiteAttackersCnt++;
-            trainWhiteAttackWeight += PIECE_ATTACK_WEIGHT[Queen] * attackedSquares;
+            trainWhiteAttackWeight += round(params[PIECE_ATTACK_WEIGHT_IDX + Queen] * attackedSquares);
+            // trainWhiteAttackWeight += PIECE_ATTACK_WEIGHT[Queen] * attackedSquares;
         } else {
             trainBlackAttackersCnt++;
-            trainBlackAttackWeight += PIECE_ATTACK_WEIGHT[Queen] * attackedSquares;
+            trainBlackAttackWeight += round(params[PIECE_ATTACK_WEIGHT_IDX + Queen] * attackedSquares);
+            // trainBlackAttackWeight += PIECE_ATTACK_WEIGHT[Queen] * attackedSquares;
         }
     }
 
@@ -782,39 +817,69 @@ int trainEvalQueen(
     return eval;
 }
 
-int trainWhiteKingShield(int KING_SHIELD[3]) {
+double trainWhiteKingShield() {
     U64 ourPawnsBB = (board.whitePiecesBB & board.pawnsBB);
     int sq = board.whiteKingSquare;
 
-    int eval = 0;
+    // int eval = 0;
     // queen side
+    // if(sq%8 < 3) {
+    //     if(ourPawnsBB & bits[a2]) eval += KING_SHIELD[1];
+    //     else if(ourPawnsBB & bits[a3]) eval += KING_SHIELD[2];
+    //     else eval -= KING_SHIELD[0];
+
+    //     if(ourPawnsBB & bits[b2]) eval += KING_SHIELD[1];
+    //     else if(ourPawnsBB & bits[b3]) eval += KING_SHIELD[2];
+    //     else eval -= KING_SHIELD[0];
+
+    //     if(ourPawnsBB & bits[c2]) eval += KING_SHIELD[1];
+    //     else if(ourPawnsBB & bits[c3]) eval += KING_SHIELD[2];
+    //     else eval -= KING_SHIELD[0];
+    // }
+
+    // // king side
+    // else if(sq%8 > 4) {
+    //     if(ourPawnsBB & bits[f2]) eval += KING_SHIELD[1];
+    //     else if(ourPawnsBB & bits[f3]) eval += KING_SHIELD[2];
+    //     else eval -= KING_SHIELD[0];
+
+    //     if(ourPawnsBB & bits[g2]) eval += KING_SHIELD[1];
+    //     else if(ourPawnsBB & bits[g3]) eval += KING_SHIELD[2];
+    //     else eval -= KING_SHIELD[0];
+
+    //     if(ourPawnsBB & bits[h2]) eval += KING_SHIELD[1];
+    //     else if(ourPawnsBB & bits[h3]) eval += KING_SHIELD[2];
+    //     else eval -= KING_SHIELD[0];
+    // }
+
+    double eval = 0;
     if(sq%8 < 3) {
-        if(ourPawnsBB & bits[a2]) eval += KING_SHIELD[1];
-        else if(ourPawnsBB & bits[a3]) eval += KING_SHIELD[2];
-        else eval -= KING_SHIELD[0];
+        if(ourPawnsBB & bits[a2]) eval += params[KING_SHIELD_IDX + 1];
+        else if(ourPawnsBB & bits[a3]) eval += params[KING_SHIELD_IDX + 2];
+        else eval -= params[KING_SHIELD_IDX + 0];
 
-        if(ourPawnsBB & bits[b2]) eval += KING_SHIELD[1];
-        else if(ourPawnsBB & bits[b3]) eval += KING_SHIELD[2];
-        else eval -= KING_SHIELD[0];
+        if(ourPawnsBB & bits[b2]) eval += params[KING_SHIELD_IDX + 1];
+        else if(ourPawnsBB & bits[b3]) eval += params[KING_SHIELD_IDX + 2];
+        else eval -= params[KING_SHIELD_IDX + 0];
 
-        if(ourPawnsBB & bits[c2]) eval += KING_SHIELD[1];
-        else if(ourPawnsBB & bits[c3]) eval += KING_SHIELD[2];
-        else eval -= KING_SHIELD[0];
+        if(ourPawnsBB & bits[c2]) eval += params[KING_SHIELD_IDX + 1];
+        else if(ourPawnsBB & bits[c3]) eval += params[KING_SHIELD_IDX + 2];
+        else eval -= params[KING_SHIELD_IDX + 0];
     }
 
     // king side
     else if(sq%8 > 4) {
-        if(ourPawnsBB & bits[f2]) eval += KING_SHIELD[1];
-        else if(ourPawnsBB & bits[f3]) eval += KING_SHIELD[2];
-        else eval -= KING_SHIELD[0];
+        if(ourPawnsBB & bits[f2]) eval += params[KING_SHIELD_IDX + 1];
+        else if(ourPawnsBB & bits[f3]) eval += params[KING_SHIELD_IDX + 2];
+        else eval -= params[KING_SHIELD_IDX + 0];
 
-        if(ourPawnsBB & bits[g2]) eval += KING_SHIELD[1];
-        else if(ourPawnsBB & bits[g3]) eval += KING_SHIELD[2];
-        else eval -= KING_SHIELD[0];
+        if(ourPawnsBB & bits[g2]) eval += params[KING_SHIELD_IDX + 1];
+        else if(ourPawnsBB & bits[g3]) eval += params[KING_SHIELD_IDX + 2];
+        else eval -= params[KING_SHIELD_IDX + 0];
 
-        if(ourPawnsBB & bits[h2]) eval += KING_SHIELD[1];
-        else if(ourPawnsBB & bits[h3]) eval += KING_SHIELD[2];
-        else eval -= KING_SHIELD[0];
+        if(ourPawnsBB & bits[h2]) eval += params[KING_SHIELD_IDX + 1];
+        else if(ourPawnsBB & bits[h3]) eval += params[KING_SHIELD_IDX + 2];
+        else eval -= params[KING_SHIELD_IDX + 0];
     }
 
     // --- UPDATE GRADIENTS ---
@@ -874,40 +939,71 @@ int trainWhiteKingShield(int KING_SHIELD[3]) {
     return eval;
 }
 
-int trainBlackKingShield(int KING_SHIELD[3]) {
+double trainBlackKingShield() {
     U64 ourPawnsBB = (board.blackPiecesBB & board.pawnsBB);
     int sq = board.blackKingSquare;
 
-    int eval = 0;
+    // int eval = 0;
+    // // queen side
+
+    // if(sq%8 < 3) {
+    //     if(ourPawnsBB & bits[a7]) eval += KING_SHIELD[1];
+    //     else if(ourPawnsBB & bits[a6]) eval += KING_SHIELD[2];
+    //     else eval -= KING_SHIELD[0];
+
+    //     if(ourPawnsBB & bits[b7]) eval += KING_SHIELD[1];
+    //     else if(ourPawnsBB & bits[b6]) eval += KING_SHIELD[2];
+    //     else eval -= KING_SHIELD[0];
+
+    //     if(ourPawnsBB & bits[c7]) eval += KING_SHIELD[1];
+    //     else if(ourPawnsBB & bits[c6]) eval += KING_SHIELD[2];
+    //     else eval -= KING_SHIELD[0];
+    // }
+
+    // // king side
+    // else if(sq%8 > 4) {
+    //     if(ourPawnsBB & bits[f7]) eval += KING_SHIELD[1];
+    //     else if(ourPawnsBB & bits[f6]) eval += KING_SHIELD[2];
+    //     else eval -= KING_SHIELD[0];
+
+    //     if(ourPawnsBB & bits[g7]) eval += KING_SHIELD[1];
+    //     else if(ourPawnsBB & bits[g6]) eval += KING_SHIELD[2];
+    //     else eval -= KING_SHIELD[0];
+
+    //     if(ourPawnsBB & bits[h7]) eval += KING_SHIELD[1];
+    //     else if(ourPawnsBB & bits[h6]) eval += KING_SHIELD[2];
+    //     else eval -= KING_SHIELD[0];
+    // }
+    double eval = 0;
     // queen side
 
     if(sq%8 < 3) {
-        if(ourPawnsBB & bits[a7]) eval += KING_SHIELD[1];
-        else if(ourPawnsBB & bits[a6]) eval += KING_SHIELD[2];
-        else eval -= KING_SHIELD[0];
+        if(ourPawnsBB & bits[a7]) eval += params[KING_SHIELD_IDX + 1];
+        else if(ourPawnsBB & bits[a6]) eval += params[KING_SHIELD_IDX + 2];
+        else eval -= params[KING_SHIELD_IDX + 0];
 
-        if(ourPawnsBB & bits[b7]) eval += KING_SHIELD[1];
-        else if(ourPawnsBB & bits[b6]) eval += KING_SHIELD[2];
-        else eval -= KING_SHIELD[0];
+        if(ourPawnsBB & bits[b7]) eval += params[KING_SHIELD_IDX + 1];
+        else if(ourPawnsBB & bits[b6]) eval += params[KING_SHIELD_IDX + 2];
+        else eval -= params[KING_SHIELD_IDX + 0];
 
-        if(ourPawnsBB & bits[c7]) eval += KING_SHIELD[1];
-        else if(ourPawnsBB & bits[c6]) eval += KING_SHIELD[2];
-        else eval -= KING_SHIELD[0];
+        if(ourPawnsBB & bits[c7]) eval += params[KING_SHIELD_IDX + 1];
+        else if(ourPawnsBB & bits[c6]) eval += params[KING_SHIELD_IDX + 2];
+        else eval -= params[KING_SHIELD_IDX + 0];
     }
 
     // king side
     else if(sq%8 > 4) {
-        if(ourPawnsBB & bits[f7]) eval += KING_SHIELD[1];
-        else if(ourPawnsBB & bits[f6]) eval += KING_SHIELD[2];
-        else eval -= KING_SHIELD[0];
+        if(ourPawnsBB & bits[f7]) eval += params[KING_SHIELD_IDX + 1];
+        else if(ourPawnsBB & bits[f6]) eval += params[KING_SHIELD_IDX + 2];
+        else eval -= params[KING_SHIELD_IDX + 0];
 
-        if(ourPawnsBB & bits[g7]) eval += KING_SHIELD[1];
-        else if(ourPawnsBB & bits[g6]) eval += KING_SHIELD[2];
-        else eval -= KING_SHIELD[0];
+        if(ourPawnsBB & bits[g7]) eval += params[KING_SHIELD_IDX + 1];
+        else if(ourPawnsBB & bits[g6]) eval += params[KING_SHIELD_IDX + 2];
+        else eval -= params[KING_SHIELD_IDX + 0];
 
-        if(ourPawnsBB & bits[h7]) eval += KING_SHIELD[1];
-        else if(ourPawnsBB & bits[h6]) eval += KING_SHIELD[2];
-        else eval -= KING_SHIELD[0];
+        if(ourPawnsBB & bits[h7]) eval += params[KING_SHIELD_IDX + 1];
+        else if(ourPawnsBB & bits[h6]) eval += params[KING_SHIELD_IDX + 2];
+        else eval -= params[KING_SHIELD_IDX + 0];
     }
 
     // --- UPDATE GRADIENTS ---
@@ -968,16 +1064,11 @@ int trainBlackKingShield(int KING_SHIELD[3]) {
 }
 
 // evaluate every pawn independently but store the full pawn structure evaluation in the hash map
-int trainEvalPawnStructure(
-    bool useHash,
-    int MG_PAWN_TABLE[64], int EG_PAWN_TABLE[64], int PASSED_PAWN_TABLE[64],
-    int& DOUBLED_PAWNS_PENALTY, int& WEAK_PAWN_PENALTY, int& C_PAWN_PENALTY,
-    int PIECE_VALUES[7]
-) {
+double trainEvalPawnStructure(bool useHash) {
     U64 whitePawns = (board.pawnsBB & board.whitePiecesBB);
     U64 blackPawns = (board.pawnsBB & board.blackPiecesBB);
 
-    int eval;
+    double eval;
     if(useHash) {
         eval = retrievePawnEval();
         if(eval != VAL_UNKNOWN) return eval;
@@ -986,16 +1077,12 @@ int trainEvalPawnStructure(
     eval = 0;
     while(whitePawns) {
         int sq = bitscanForward(whitePawns);
-        eval += trainEvalPawn(
-            sq, White, MG_PAWN_TABLE, EG_PAWN_TABLE, PASSED_PAWN_TABLE,
-            DOUBLED_PAWNS_PENALTY, WEAK_PAWN_PENALTY, C_PAWN_PENALTY, PIECE_VALUES);
+        eval += trainEvalPawn(sq, White);
         whitePawns &= (whitePawns-1);
     }
     while(blackPawns) {
         int sq = bitscanForward(blackPawns);
-        eval -= trainEvalPawn(
-            sq, Black, MG_PAWN_TABLE, EG_PAWN_TABLE, PASSED_PAWN_TABLE,
-            DOUBLED_PAWNS_PENALTY, WEAK_PAWN_PENALTY, C_PAWN_PENALTY, PIECE_VALUES);
+        eval -= trainEvalPawn(sq, Black);
         blackPawns &= (blackPawns-1);
     }
 
@@ -1004,12 +1091,7 @@ int trainEvalPawnStructure(
     return eval;
 }
 
-int trainEvalPawn(
-    int sq, int color, 
-    int MG_PAWN_TABLE[64], int EG_PAWN_TABLE[64], int PASSED_PAWN_TABLE[64],
-    int& DOUBLED_PAWNS_PENALTY, int& WEAK_PAWN_PENALTY, int& C_PAWN_PENALTY,
-    int PIECE_VALUES[7]
-) {
+double trainEvalPawn(int sq, int color) {
     U64 ourPiecesBB = (color == White ? board.whitePiecesBB : board.blackPiecesBB);
 
     U64 opponentPawnsBB = (board.pawnsBB & (color == White ? board.blackPiecesBB : board.whitePiecesBB));
@@ -1026,12 +1108,17 @@ int trainEvalPawn(
     // initial pawn value + square value
     int mgWeight = min(trainGamePhase(), 24);
     int egWeight = 24-mgWeight;
-    int pst_eval = (
-        mgWeight * MG_PAWN_TABLE[(color == White ? sq : TRAIN_FLIPPED[sq])] 
-        + egWeight * EG_PAWN_TABLE[(color == White ? sq : TRAIN_FLIPPED[sq])]
-    ) / 24;
+    // int pst_eval = (
+    //     mgWeight * MG_PAWN_TABLE[(color == White ? sq : TRAIN_FLIPPED[sq])] 
+    //     + egWeight * EG_PAWN_TABLE[(color == White ? sq : TRAIN_FLIPPED[sq])]
+    // ) / 24;
+    double pst_eval = (
+        mgWeight * params[MG_PAWN_TABLE_IDX + (color == White ? sq : TRAIN_FLIPPED[sq])] 
+        + egWeight * params[EG_PAWN_TABLE_IDX + (color == White ? sq : TRAIN_FLIPPED[sq])]
+    ) / 24.0;
 
-    int eval = PIECE_VALUES[Pawn] + pst_eval;
+    // int eval = PIECE_VALUES[Pawn] + pst_eval;
+    double eval = params[PIECE_VALUES_IDX + Pawn] + pst_eval;
     int dir = (color == White ? 8 : -8);
 
     // check squares in front of the pawn to see if it is passed or opposed/doubled
@@ -1039,7 +1126,8 @@ int trainEvalPawn(
     while(curSq < 64 && curSq >= 0) {
         if(board.pawnsBB & bits[curSq]) {
             passed = false;
-            if(ourPiecesBB & bits[curSq]) eval -= DOUBLED_PAWNS_PENALTY;
+            // if(ourPiecesBB & bits[curSq]) eval -= DOUBLED_PAWNS_PENALTY;
+            if(ourPiecesBB & bits[curSq]) eval -= params[DOUBLED_PAWNS_PENALTY_IDX];
             else opposed = true;
         }
         if(opponentPawnAttacksBB & bits[curSq]) passed = false;
@@ -1060,7 +1148,8 @@ int trainEvalPawn(
     // bonus for passed pawns, bigger bonus for protected passers
     // the bonus is also bigger if the pawn is more advanced
     if(passed) {
-        int bonus = PASSED_PAWN_TABLE[(color == White ? sq : TRAIN_FLIPPED[sq])];
+        // int bonus = PASSED_PAWN_TABLE[(color == White ? sq : TRAIN_FLIPPED[sq])];
+        double bonus = params[PASSED_PAWN_TABLE_IDX + (color == White ? sq : TRAIN_FLIPPED[sq])];
         if(ourPawnAttacksBB & bits[sq]) bonus = (bonus*4)/3;
 
         eval += bonus;
@@ -1068,7 +1157,8 @@ int trainEvalPawn(
 
     // penalty for weak (backward or isolated) pawns and bigger penalty if they are on a semi open file
     if(weak) {
-        int penalty = WEAK_PAWN_PENALTY;
+        double penalty = params[WEAK_PAWN_PENALTY_IDX];
+        // int penalty = WEAK_PAWN_PENALTY;
         if(!opposed) penalty = (penalty*4)/3;
 
         eval -= penalty;
@@ -1076,9 +1166,11 @@ int trainEvalPawn(
 
     // penalty for having a pawn on d4 and not having a pawn on c4 or c3 in a d4 opening
     if(color == White && sq == c2 && (ourPawnsBB & bits[d4]) && !(ourPawnsBB & bits[e4]))
-        eval -= C_PAWN_PENALTY;
+        // eval -= C_PAWN_PENALTY;
+        eval -= params[C_PAWN_PENALTY_IDX];
     if(color == Black && sq == c7 && (ourPawnsBB & bits[d5]) && !(ourPawnsBB & bits[e5]))
-        eval -= C_PAWN_PENALTY;
+        // eval -= C_PAWN_PENALTY;
+        eval -= params[C_PAWN_PENALTY_IDX];
 
     // --- UPDATE GRADIENTS ---
     gradients[PIECE_VALUES_IDX + Pawn] += (color == White ? 1 : -1);
