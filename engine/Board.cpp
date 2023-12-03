@@ -2,6 +2,7 @@
 #include <string>
 #include <stack>
 #include <iostream>
+#include <assert.h>
 
 #include "Board.h"
 #include "MagicBitboards.h"

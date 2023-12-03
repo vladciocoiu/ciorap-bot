@@ -8,6 +8,7 @@
 #include <iomanip>
 #include <algorithm>
 #include <random>
+#include <assert.h>
 
 #include "train_eval.h"
 #include "../engine/Board.h"
@@ -15,6 +16,7 @@
 const double EPS = 1e-4;
 
 extern const int NUM_PARAMS;
+extern int MG_PAWN_TABLE_IDX;
 
 using namespace std;
 

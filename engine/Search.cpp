@@ -4,6 +4,7 @@
 #include <unordered_map>
 #include <iostream>
 #include <stack>
+#include <assert.h>
 
 #include "Evaluate.h"
 #include "Board.h"
