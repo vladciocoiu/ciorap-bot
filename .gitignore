@@ -1,7 +1,3 @@
-.DS_Store
-.vscode/
-engine/.DS_Store
-
 # Ignore all
 *
 # Unignore all with extensions
@@ -11,6 +7,10 @@ engine/.DS_Store
 
 *.o
 *.txt
+
+.DS_Store
+.vscode/
+engine/.DS_Store
 
 engine/.vscode
 engine/script.py
