@@ -36,6 +36,6 @@ g++ -std=c++20 *.cpp -o ciorap-bot
 
 ```
 cd training
-g++ -std=c++20 train.cpp train_eval.cpp ../engine/Board.cpp ../engine/UCI.cpp ../engine TranspositionTable.cpp ../engine/Search.cpp ../engine/Moves.cpp ../engine/MagicBitboards.cpp ../engine Evaluate.cpp -o train
+g++ -std=c++20 train.cpp train_eval.cpp ../engine/Board.cpp ../engine/UCI.cpp ../engine/TranspositionTable.cpp ../engine/Search.cpp ../engine/Moves.cpp ../engine/MagicBitboards.cpp ../engine/Evaluate.cpp -o train
 ./train input_file output_file number_of_positions
 ```

@@ -170,7 +170,7 @@ void printParams(vector<double>& params, string output_file) {
 }
 
 double Sigmoid(double ev) {
-    return 1.0 / (1.0 + exp(-ev / 400.0));
+    return 1.0 / (1.0 + exp(-ev / 200.0));
 }
 
 double loss(double ev, double res) {
@@ -200,7 +200,7 @@ void adamOptimizer(std::vector<double>& parameters, const std::vector<double>& g
                    double beta1 = 0.9, double beta2 = 0.999, double epsilon = 1e-8) {
     t++;
 
-    for (int i = MG_PAWN_TABLE_IDX; i < MG_PAWN_TABLE_IDX + 128; i++) {
+    for (int i = 0; i < NUM_PARAMS; i++) {
         m[i] = beta1 * m[i] + (1 - beta1) * gradients[i];
         v[i] = beta2 * v[i] + (1 - beta2) * std::pow(gradients[i], 2);
 
@@ -211,16 +211,16 @@ void adamOptimizer(std::vector<double>& parameters, const std::vector<double>& g
     }
 }
 
-vector<double> gradientDescent(vector<double> &parValues) {
+vector<double> gradientDescent(vector<double> &parValues, string output_file) {
     assert(parValues.size() == NUM_PARAMS);
 
     vector<double> bestParValues = parValues;
 
     int numEpochs = 1000;
-    double learningRate = 0.1;
-    const double lrDecayFactor = 0.9;
-    const int lrPatience = 5;
-    const int patience = 20;
+    double learningRate = 0.5;
+    const double lrDecayFactor = 0.5;
+    const int lrPatience = 3;
+    const int patience = 12;
     int epochsFromLRReduce = 0;
     int epochsWithoutImprovement = 0;
     double bestLoss = 1e9;
@@ -314,10 +314,9 @@ vector<double> gradientDescent(vector<double> &parValues) {
             bestLoss = valLoss;
             bestParValues = parValues;
 
-            const string params_output_file = "best_params.txt";
-            std::cout << "Found new bestLoss=" << fixed << setprecision(5) << bestLoss / (double)valPositions.size() << ". Saving params to " << params_output_file << "...\n";
+            std::cout << "Found new bestLoss=" << fixed << setprecision(5) << bestLoss / (double)valPositions.size() << ". Saving params to " << output_file << "...\n";
             std::cout.flush();
-            printParams(bestParValues, "best_params.txt");
+            printParams(bestParValues, output_file);
             epochsWithoutImprovement = 0;
             epochsFromLRReduce = 0;
         } else {
@@ -424,7 +423,7 @@ int main(int argc, char **argv) {
     4, 3, 100, 15, 30, 20, 50, 100, 20, 5, 50, 10, 20, 3, 30, 5, 3, 50, 20, 2, 40, 15, 25, 10};
 
 
-    vector<double> newPar = gradientDescent(params);
+    vector<double> newPar = gradientDescent(params, argv[2]);
 
     printParams(newPar, argv[2]);
 
