@@ -5,6 +5,8 @@
 
 using namespace std;
 
+typedef unsigned long long U64;
+
 class Search {
 private:
     static int bestMove;
@@ -21,6 +23,13 @@ private:
     static int pvArray[];
 
     static const int ASP_INCREASE;
+
+    // --- SELECTIVITY ---
+    static int lmrTable[101][256];
+    static bool lmrInitialized;
+    static int staticEvalStack[256];
+    static void initLMR();
+    static U64 attackersTo(int sq, U64 occ);
 
     // --- MOVE ORDERING ---
     static int captureScore(int move);
@@ -51,7 +60,8 @@ public:
     static bool timeOver;
 
     static pair<int, int> root();
-    static int quiescence(int alpha, int beta);
+    static int quiescence(int alpha, int beta, short ply = 0);
+    static int see(int move);
     static void clearHistory();
     static void showPV(int depth);
 };

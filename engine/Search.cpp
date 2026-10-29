@@ -42,6 +42,125 @@ int Search::pvArray[(MAX_DEPTH * MAX_DEPTH + MAX_DEPTH) / 2 + MAX_DEPTH];
 
 const int Search::ASP_INCREASE = 50;
 
+int Search::lmrTable[101][256];
+bool Search::lmrInitialized = false;
+int Search::staticEvalStack[256];
+
+// --- SELECTIVITY PARAMETERS ---
+static const int EVAL_NONE = -2000000; // marks plies where the static eval is unknown (in check)
+static const int RFP_MAX_DEPTH = 8;
+static const int RFP_MARGIN = 85;
+static const int LMP_MAX_DEPTH = 6;
+static const int SEE_PRUNE_MAX_DEPTH = 8;
+static const int SEE_QUIET_MARGIN = 50;
+static const int SEE_CAPTURE_MARGIN = 100;
+
+// piece values used only for static exchange evaluation (king must be "infinite")
+static const int SEE_VALUES[7] = {0, 100, 325, 350, 500, 975, 20000};
+
+// --- LATE MOVE REDUCTION TABLE ---
+// logarithmic reduction formula: grows slowly with both depth and move number
+void Search::initLMR() {
+    for(int d = 0; d <= 100; d++) {
+        for(int m = 0; m < 256; m++) {
+            if(d == 0 || m == 0) lmrTable[d][m] = 0;
+            else lmrTable[d][m] = int(0.75 + log(double(d)) * log(double(m)) / 2.25);
+        }
+    }
+    lmrInitialized = true;
+}
+
+// --- STATIC EXCHANGE EVALUATION ---
+// returns all pieces of both colors that attack sq, given the occupancy occ
+U64 Search::attackersTo(int sq, U64 occ) {
+    U64 whitePawns = (board->pawnsBB & board->whitePiecesBB);
+    U64 blackPawns = (board->pawnsBB & board->blackPiecesBB);
+    U64 kings = (BoardUtils::bits[board->whiteKingSquare] | BoardUtils::bits[board->blackKingSquare]);
+
+    U64 res = 0;
+    res |= (BoardUtils::blackPawnAttacksBB[sq] & whitePawns); // white pawns attack sq from below
+    res |= (BoardUtils::whitePawnAttacksBB[sq] & blackPawns); // black pawns attack sq from above
+    res |= (BoardUtils::knightAttacksBB[sq] & board->knightsBB);
+    res |= (BoardUtils::kingAttacksBB[sq] & kings);
+    res |= (MagicBitboardUtils::magicBishopAttacks(occ, sq) & (board->bishopsBB | board->queensBB));
+    res |= (MagicBitboardUtils::magicRookAttacks(occ, sq) & (board->rooksBB | board->queensBB));
+
+    return (res & occ);
+}
+
+// swap-list SEE: returns the expected material balance of the exchange sequence
+// started by move on its destination square (from the perspective of the moving side)
+int Search::see(int move) {
+    if(MoveUtils::isCastle(move)) return 0;
+
+    int from = MoveUtils::getFromSq(move);
+    int to = MoveUtils::getToSq(move);
+    int us = MoveUtils::getColor(move);
+
+    int gain[32];
+    int d = 0;
+
+    U64 occ = (board->whitePiecesBB | board->blackPiecesBB);
+
+    gain[0] = SEE_VALUES[MoveUtils::getCapturedPiece(move)];
+    int attackerValue = SEE_VALUES[MoveUtils::getPiece(move)];
+
+    if(MoveUtils::isPromotion(move)) {
+        gain[0] += SEE_VALUES[MoveUtils::getPromotionPiece(move)] - SEE_VALUES[Pawn];
+        attackerValue = SEE_VALUES[MoveUtils::getPromotionPiece(move)];
+    }
+
+    // remove the en passant captured pawn from the occupancy
+    if(MoveUtils::isEP(move)) occ ^= BoardUtils::bits[(us == White ? to - 8 : to + 8)];
+
+    U64 fromSet = BoardUtils::bits[from];
+    U64 attadef = attackersTo(to, occ);
+    const U64 diagSliders = (board->bishopsBB | board->queensBB);
+    const U64 lineSliders = (board->rooksBB | board->queensBB);
+
+    const U64 pieceBBs[7] = {0, board->pawnsBB, board->knightsBB, board->bishopsBB,
+                             board->rooksBB, board->queensBB,
+                             BoardUtils::bits[board->whiteKingSquare] | BoardUtils::bits[board->blackKingSquare]};
+
+    while(fromSet) {
+        d++;
+        gain[d] = attackerValue - gain[d-1]; // score if the piece we just moved gets captured
+        if(max(-gain[d-1], gain[d]) < 0) break; // pruning optimization
+
+        attadef ^= fromSet;
+        occ ^= fromSet;
+
+        // reveal x-ray attackers behind the piece that just captured
+        attadef |= ((MagicBitboardUtils::magicBishopAttacks(occ, to) & diagSliders)
+                  | (MagicBitboardUtils::magicRookAttacks(occ, to) & lineSliders)) & occ;
+
+        // find the least valuable attacker of the side to move
+        int side = ((d & 1) ? (us ^ (White | Black)) : us);
+        U64 sidePieces = (side == White ? board->whitePiecesBB : board->blackPiecesBB);
+        U64 otherPieces = (side == White ? board->blackPiecesBB : board->whitePiecesBB);
+
+        fromSet = 0;
+        for(int pc = Pawn; pc <= King; pc++) {
+            U64 subset = (attadef & sidePieces & pieceBBs[pc]);
+            if(subset) {
+                fromSet = (subset & (~subset + 1)); // isolate lowest bit
+                attackerValue = SEE_VALUES[pc];
+
+                // the king can only capture if the square is no longer defended
+                if(pc == King && (attadef & otherPieces & ~fromSet)) fromSet = 0;
+                break;
+            }
+        }
+    }
+
+    // minimax backwards: each side can choose to stop the exchanges if negative
+    while(--d) {
+        gain[d-1] = -max(-gain[d-1], gain[d]);
+    }
+
+    return gain[0];
+}
+
 
 // --- MOVE ORDERING ---
 int Search::captureScore(int move) {
@@ -154,9 +273,9 @@ void Search::sortMoves(int *moves, int num, short ply) {
     assert(newNum == num);
 }
 
-// --- QUIESCENCE SEARCH --- 
+// --- QUIESCENCE SEARCH ---
 // only searching for captures at the end of a regular search in order to ensure the engine won't miss obvious tactics
-int Search::quiescence(int alpha, int beta) {
+int Search::quiescence(int alpha, int beta, short ply) {
     if(!(nodesQ & 4095) && !infiniteTime) {
         long long currTime = chrono::duration_cast<chrono::milliseconds>(chrono::system_clock::now().time_since_epoch()).count();
         if(currTime >= stopTime) timeOver = true;
@@ -166,8 +285,17 @@ int Search::quiescence(int alpha, int beta) {
 
     if(board->isDraw()) return 0;
 
+    // --- TT PROBE ---
+    // any stored entry (searched at depth >= 0) is at least as reliable as a quiescence search
+    if(transpositionTable != nullptr) {
+        int hashScore = transpositionTable->probeHash(0, alpha, beta, ply);
+        if(hashScore != TranspositionTable::VAL_UNKNOWN) return hashScore;
+    }
+
+    bool inCheck = board->isInCheck();
+
     int standPat = evaluate();
-    if(standPat >= beta && !board->isInCheck()) return beta;
+    if(standPat >= beta && !inCheck) return beta;
 
     alpha = max(alpha, standPat);
 
@@ -176,8 +304,6 @@ int Search::quiescence(int alpha, int beta) {
 
     sortMoves(moves, num, -1);
     for(int idx = 0; idx < num; idx++)  {
-        // if(MoveUtils::isCapture(moves[idx]) && (seeMove(moves[idx]) < 0)) continue;
-
         // --- DELTA PRUNING --- 
         // we test if each move has the potential to raise alpha
         // if it doesn't, then the position is hopeless so searching deeper won't improve it
@@ -187,8 +313,12 @@ int Search::quiescence(int alpha, int beta) {
         const int ENDGAME_MATERIAL = 10;
         if((delta <= alpha) && (gamePhase() - MG_WEIGHT[MoveUtils::getCapturedPiece(moves[idx])] >= ENDGAME_MATERIAL)) continue;
 
+        // --- SEE PRUNING ---
+        // skip captures that lose material according to the static exchange evaluation
+        if(!inCheck && !MoveUtils::isPromotion(moves[idx]) && see(moves[idx]) < 0) continue;
+
         board->makeMove(moves[idx]);
-        int score = -quiescence(-beta, -alpha);
+        int score = -quiescence(-beta, -alpha, ply + 1);
         board->unmakeMove(moves[idx]);
 
         if(timeOver) return 0;
@@ -205,7 +335,6 @@ int Search::quiescence(int alpha, int beta) {
 // alpha-beta algorithm with a fail-hard framework and PVS
 int Search::alphaBeta(int alpha, int beta, short depth, short ply, bool doNull) {
     assert(depth >= 0);
-    assert(ply <= MAX_DEPTH);
 
     if(!(nodesSearched & 4095) && !infiniteTime) {
         long long currTime = chrono::duration_cast<chrono::milliseconds>(chrono::system_clock::now().time_since_epoch()).count();
@@ -213,6 +342,9 @@ int Search::alphaBeta(int alpha, int beta, short depth, short ply, bool doNull) 
     }
     if(timeOver) return 0;
     nodesSearched++;
+
+    // safety net: extensions could otherwise push the search past the pv / killer array bounds
+    if(ply >= MAX_DEPTH - 1) return evaluate();
 
     int pvIndex = ply * (2 * MAX_DEPTH + 1 - ply) / 2;
     int pvNextIndex = pvIndex + MAX_DEPTH - ply;
@@ -233,6 +365,11 @@ int Search::alphaBeta(int alpha, int beta, short depth, short ply, bool doNull) 
 
     bool isPV = (beta - alpha > 1);
 
+    // --- CHECK EXTENSION ---
+    // positions where we are in check are tactically volatile, so we search them one ply deeper
+    // (this also guarantees that we never drop into quiescence search while in check)
+    if(isInCheck) depth++;
+
     // retrieving the hashed move and evaluation if there is any
     int hashScore = transpositionTable->probeHash(depth, alpha, beta, ply);
     if(hashScore != TranspositionTable::VAL_UNKNOWN && !isPV) return hashScore;
@@ -244,16 +381,28 @@ int Search::alphaBeta(int alpha, int beta, short depth, short ply, bool doNull) 
         return 0; // stalemate
     }
 
-    if(depth <= 0) return quiescence(alpha, beta);
+    if(depth <= 0) return quiescence(alpha, beta, ply);
 
     int currBestMove = MoveUtils::NO_MOVE;
 
-    // --- STATIC NULL MOVE PRUNING ---
+    // --- STATIC EVAL AND IMPROVING HEURISTIC ---
+    // "improving" means our static eval is better than it was on our previous turn
+    // when we are improving, we prune less aggressively, and when we are not, more aggressively
+    int staticScore = (isInCheck ? EVAL_NONE : evaluate());
+    staticEvalStack[ply] = staticScore;
+
+    bool improving = false;
+    if(!isInCheck) {
+        if(ply >= 2 && staticEvalStack[ply-2] != EVAL_NONE) improving = (staticScore > staticEvalStack[ply-2]);
+        else if(ply >= 4 && staticEvalStack[ply-4] != EVAL_NONE) improving = (staticScore > staticEvalStack[ply-4]);
+        else improving = true;
+    }
+
+    // --- REVERSE FUTILITY PRUNING (STATIC NULL MOVE PRUNING) ---
     // if our position is so good that we can afford to lose some material
     // we assume this node will fail high and we prune its branch
-    int staticScore = evaluate();
-    if(!isInCheck && !isPV && abs(beta) < MATE_THRESHOLD) {
-        int scoreMargin = 100 * depth;
+    if(!isInCheck && !isPV && depth <= RFP_MAX_DEPTH && abs(beta) < MATE_THRESHOLD) {
+        int scoreMargin = RFP_MARGIN * (depth - (improving ? 1 : 0));
         if (staticScore - scoreMargin >= beta) {
             return staticScore - scoreMargin;
         }
@@ -267,7 +416,7 @@ int Search::alphaBeta(int alpha, int beta, short depth, short ply, bool doNull) 
         board->makeMove(MoveUtils::NO_MOVE);
 
         short R = 3 + depth / 6;
-        int score = -alphaBeta(-beta, -beta + 1, depth - R - 1, ply + 1, false);
+        int score = -alphaBeta(-beta, -beta + 1, max(0, depth - R - 1), ply + 1, false);
 
         board->unmakeMove(MoveUtils::NO_MOVE);
 
@@ -280,7 +429,7 @@ int Search::alphaBeta(int alpha, int beta, short depth, short ply, bool doNull) 
     // do a quiescence search and confirm the position will fail low
     // if qsearch score fails low we trust it and return
     if(!isPV && !isInCheck && depth <= 3 && staticScore + 250 * depth <= alpha) {
-        int score = quiescence(alpha, beta);
+        int score = quiescence(alpha, beta, ply);
         if(score <= alpha) return score;
     }
 
@@ -302,13 +451,57 @@ int Search::alphaBeta(int alpha, int beta, short depth, short ply, bool doNull) 
         fPrune = (staticScore + F_MARGIN[depth] <= alpha);
     }
 
+    // --- LATE MOVE PRUNING ---
+    // in non-pv nodes close to the horizon, quiet moves sorted late are very unlikely to be good
+    // so after a certain number of quiet moves, we skip the remaining ones
+    const int lmpLimit = (3 + depth * depth) / (improving ? 1 : 2);
+
     int movesSearched = 0;
+    int quietsSeen = 0;
     
     sortMoves(moves, num, ply);
     for(int idx = 0; idx < num; idx++) {
         if(alpha >= beta) return alpha;
 
-        board->makeMove(moves[idx]);
+        const int move = moves[idx];
+        const bool isQuiet = (!MoveUtils::isCapture(move) && !MoveUtils::isPromotion(move));
+        const bool isKiller = (move == killerMoves[ply][0] || move == killerMoves[ply][1]);
+        if(isQuiet) quietsSeen++;
+
+        // pruning is only done after we have a move to fall back on, never at the root and never in check
+        const bool canPrune = (ply > 0 && movesSearched > 0 && !isInCheck && abs(alpha) < MATE_THRESHOLD);
+
+        // --- SEE PRUNING ---
+        // skip moves that lose too much material according to the static exchange evaluation
+        // the allowed loss grows with depth, since deeper searches can find compensation
+        bool seePrune = false;
+        if(canPrune && depth <= SEE_PRUNE_MAX_DEPTH && !MoveUtils::isPromotion(move)) {
+            int threshold = (isQuiet ? -SEE_QUIET_MARGIN * depth : -SEE_CAPTURE_MARGIN * depth);
+            seePrune = (see(move) < threshold);
+        }
+
+        board->makeMove(move);
+        const bool givesCheck = board->isInCheck();
+
+        if(canPrune && !givesCheck) {
+            // late move pruning
+            if(isQuiet && !isPV && depth <= LMP_MAX_DEPTH && quietsSeen > lmpLimit) {
+                board->unmakeMove(move);
+                continue;
+            }
+
+            // futility pruning
+            if(fPrune && isQuiet) {
+                board->unmakeMove(move);
+                continue;
+            }
+
+            // see pruning
+            if(seePrune) {
+                board->unmakeMove(move);
+                continue;
+            }
+        }
             
         // --- PRINCIPAL VARIATION SEARCH --- 
         // we do a full search only until we find a move that raises alpha and we consider it to be the best
@@ -318,21 +511,24 @@ int Search::alphaBeta(int alpha, int beta, short depth, short ply, bool doNull) 
         if(!movesSearched) {
             score = -alphaBeta(-beta, -alpha, depth-1, ply+1, true);
         } else {
-            // Futility prune if conditions are met
-            if(fPrune && !MoveUtils::isCapture(moves[idx]) && !MoveUtils::isPromotion(moves[idx]) && !board->isInCheck()) {
-                board->unmakeMove(moves[idx]);
-                continue;
-            }
-
             // --- LATE MOVE REDUCTION --- 
             // we do full searches only for the first moves, and then do a reduced search
             // if the move is potentially good, we do a full search instead
-            if(movesSearched >= 2 && !MoveUtils::isCapture(moves[idx]) && !MoveUtils::isPromotion(moves[idx]) && !isInCheck && depth >= 3 && !board->isInCheck()) {
-                int reductionDepth = int(sqrt(double(depth-1)) + sqrt(double(movesSearched-1))); 
-                if(isPV) reductionDepth = (reductionDepth * 2) / 3;
-                reductionDepth = (reductionDepth < depth-1 ? reductionDepth : depth-1);
+            if(movesSearched >= 2 && isQuiet && !isInCheck && depth >= 3) {
+                int R = lmrTable[min((int)depth, 100)][min(movesSearched, 255)];
 
-                score = -alphaBeta(-alpha-1, -alpha, depth - reductionDepth - 1, ply+1, true);
+                if(!isPV) R++; // reduce more in non-pv nodes
+                if(!improving) R++; // reduce more when our position is getting worse
+                if(isKiller) R--; // killers are likely to be good
+                if(givesCheck) R--; // checks are tactically forcing
+
+                // history-aware reduction: moves that recently caused cutoffs are reduced less
+                int hist = history[(MoveUtils::getColor(move) | MoveUtils::getPiece(move))][MoveUtils::getToSq(move)];
+                if(hist > 0) R--;
+
+                R = max(0, min(R, depth - 1));
+
+                score = -alphaBeta(-alpha-1, -alpha, depth - R - 1, ply+1, true);
             } else {
                 score = alpha + 1; // hack to ensure that full-depth search is done
             }
@@ -345,18 +541,18 @@ int Search::alphaBeta(int alpha, int beta, short depth, short ply, bool doNull) 
             }
         }
 
-        board->unmakeMove(moves[idx]);
+        board->unmakeMove(move);
         movesSearched++;
 
         if(timeOver && (ply > 0 || idx > 0)) return 0; // ensure that we at least have a move to print
         
         if(score > alpha) {
-            currBestMove = moves[idx];
+            currBestMove = move;
             if(ply == 0) bestMove = currBestMove;
             assert(currBestMove != MoveUtils::NO_MOVE);
 
             if(isPV) {
-                pvArray[pvIndex] = moves[idx];
+                pvArray[pvIndex] = move;
                 copyPv(pvArray + pvIndex + 1, pvArray + pvNextIndex, MAX_DEPTH - ply - 1);
 
                 assert(pvArray[pvIndex] != MoveUtils::NO_MOVE);
@@ -367,12 +563,12 @@ int Search::alphaBeta(int alpha, int beta, short depth, short ply, bool doNull) 
             if(score >= beta) {
                 transpositionTable->recordHash(depth, beta, TranspositionTable::HASH_F_BETA, currBestMove, ply);
 
-                if(!MoveUtils::isCapture(moves[idx]) && !MoveUtils::isPromotion(moves[idx])) {
+                if(isQuiet) {
                     // store killer moves
-                    storeKiller(ply, moves[idx]);
+                    storeKiller(ply, move);
 
                     // update move history
-                    updateHistory(moves[idx], depth);
+                    updateHistory(move, depth);
                 }
 
                 return beta;
@@ -387,8 +583,9 @@ int Search::alphaBeta(int alpha, int beta, short depth, short ply, bool doNull) 
     transpositionTable->recordHash(depth, alpha, hashFlag, currBestMove, ply);
     return alpha;
 }
-
 pair<int, int> Search::root() {
+    if(!lmrInitialized) initLMR();
+
     board->repetitionIndex = 0;
     bestMove = MoveUtils::NO_MOVE;
 
