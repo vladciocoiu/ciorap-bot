@@ -19,3 +19,4 @@ engine/See.h
 
 !CMakeLists.txt
 build/
+.aider*
