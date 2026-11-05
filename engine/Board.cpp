@@ -129,6 +129,8 @@ void init() {
     MagicBitboardUtils::initMagics();
 
     Search::clearHistory();
+    if(board == nullptr) board = new Board();
+    if(transpositionTable == nullptr) transpositionTable = new TranspositionTable();
 }
 
 void Board::clear() {
@@ -755,28 +757,28 @@ int Board::generateLegalMoves(int *moves) {
         if(ok) moves[num++] = castleMoves[idx];
     }
 
-    // ep horizontal pin
+    // ep horizontal and diagonal pin check
     for(int idx = 0; idx < numEp; idx++) {
         int from = MoveUtils::getFromSq(epMoves[idx]);
         int to = MoveUtils::getToSq(epMoves[idx]);
 
         int epRank = (from >> 3);
         int otherPawnSquare = (epRank << 3) | (to & 7);
-        U64 rooksQueens = (opponentPiecesBB & (this->rooksBB | this->queensBB) & BoardUtils::ranksBB[epRank]);
 
-        // remove the 2 pawns and compute attacks from rooks/queens on king square
-        U64 removeWhite = BoardUtils::bits[from], 
-            removeBlack = BoardUtils::bits[otherPawnSquare];
-        if(color == Black) swap(removeWhite, removeBlack);
+        // move the capturing pawn to 'to' and remove the captured pawn to check if king is left in check
+        U64 toggleWhite = (color == White ? (BoardUtils::bits[from] | BoardUtils::bits[to]) : BoardUtils::bits[otherPawnSquare]);
+        U64 toggleBlack = (color == Black ? (BoardUtils::bits[from] | BoardUtils::bits[to]) : BoardUtils::bits[otherPawnSquare]);
 
-        this->whitePiecesBB ^= removeWhite;
-        this->blackPiecesBB ^= removeBlack;
+        this->whitePiecesBB ^= toggleWhite;
+        this->blackPiecesBB ^= toggleBlack;
+        this->pawnsBB ^= (BoardUtils::bits[from] | BoardUtils::bits[to] | BoardUtils::bits[otherPawnSquare]);
 
         U64 attacks = this->attacksTo(kingSquare);
-        if((rooksQueens & attacks) == 0) moves[num++] = epMoves[idx];
+        if(attacks == 0) moves[num++] = epMoves[idx];
 
-        this->whitePiecesBB ^= removeWhite;
-        this->blackPiecesBB ^= removeBlack;
+        this->whitePiecesBB ^= toggleWhite;
+        this->blackPiecesBB ^= toggleBlack;
+        this->pawnsBB ^= (BoardUtils::bits[from] | BoardUtils::bits[to] | BoardUtils::bits[otherPawnSquare]);
     }
 
     // put the king back
@@ -888,28 +890,28 @@ int Board::generateLegalMovesQS(int *moves) {
 
     assert(numEp <= 2);
 
-    // ep horizontal pin
+    // ep horizontal and diagonal pin check
     for(int idx = 0; idx < numEp; idx++) {
         int from = MoveUtils::getFromSq(epMoves[idx]);
         int to = MoveUtils::getToSq(epMoves[idx]);
 
         int epRank = (from >> 3);
         int otherPawnSquare = (epRank << 3) | (to & 7);
-        U64 rooksQueens = (opponentPiecesBB & (this->rooksBB | this->queensBB) & BoardUtils::ranksBB[epRank]);
 
-        // remove the 2 pawns and compute attacks from rooks/queens on king square
-        U64 removeWhite = BoardUtils::bits[from], 
-            removeBlack = BoardUtils::bits[otherPawnSquare];
-        if(color == Black) swap(removeWhite, removeBlack);
+        // move the capturing pawn to 'to' and remove the captured pawn to check if king is left in check
+        U64 toggleWhite = (color == White ? (BoardUtils::bits[from] | BoardUtils::bits[to]) : BoardUtils::bits[otherPawnSquare]);
+        U64 toggleBlack = (color == Black ? (BoardUtils::bits[from] | BoardUtils::bits[to]) : BoardUtils::bits[otherPawnSquare]);
 
-        this->whitePiecesBB ^= removeWhite;
-        this->blackPiecesBB ^= removeBlack;
+        this->whitePiecesBB ^= toggleWhite;
+        this->blackPiecesBB ^= toggleBlack;
+        this->pawnsBB ^= (BoardUtils::bits[from] | BoardUtils::bits[to] | BoardUtils::bits[otherPawnSquare]);
 
         U64 attacks = this->attacksTo(kingSquare);
-        if((rooksQueens & attacks) == 0) moves[num++] = epMoves[idx];
+        if(attacks == 0) moves[num++] = epMoves[idx];
 
-        this->whitePiecesBB ^= removeWhite;
-        this->blackPiecesBB ^= removeBlack;
+        this->whitePiecesBB ^= toggleWhite;
+        this->blackPiecesBB ^= toggleBlack;
+        this->pawnsBB ^= (BoardUtils::bits[from] | BoardUtils::bits[to] | BoardUtils::bits[otherPawnSquare]);
     }
 
     // put the king back
@@ -1104,10 +1106,10 @@ bool Board::isDraw() {
 
     if((this->knightsBB | this->bishopsBB) == 0) return true; // king vs king
 
-    int whiteBishops = MagicBitboardUtils::popcount(this->bishopsBB | this->whitePiecesBB);
-    int blackBishops = MagicBitboardUtils::popcount(this->bishopsBB | this->blackPiecesBB);
-    int whiteKnights = MagicBitboardUtils::popcount(this->knightsBB | this->whitePiecesBB);
-    int blackKnights = MagicBitboardUtils::popcount(this->knightsBB | this->blackPiecesBB);
+    int whiteBishops = MagicBitboardUtils::popcount(this->bishopsBB & this->whitePiecesBB);
+    int blackBishops = MagicBitboardUtils::popcount(this->bishopsBB & this->blackPiecesBB);
+    int whiteKnights = MagicBitboardUtils::popcount(this->knightsBB & this->whitePiecesBB);
+    int blackKnights = MagicBitboardUtils::popcount(this->knightsBB & this->blackPiecesBB);
 
     if(whiteKnights + blackKnights + whiteBishops + blackBishops == 1) return true; // king and minor piece vs king
 
