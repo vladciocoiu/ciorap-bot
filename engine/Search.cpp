@@ -510,32 +510,9 @@ void Search::showPV(int depth) {
     assert(depth <= MAX_DEPTH);
 
     cout << "pv ";
-    int madeMoves[MAX_DEPTH];
-    int madeCount = 0;
     for(int i = 0; i < depth; i++) {
-        int mv = pvArray[i];
-        if(mv == MoveUtils::NO_MOVE) break;
-
-        int legalMoves[256];
-        int numLegal = board->generateLegalMoves(legalMoves);
-        bool isLegal = false;
-        for(int j = 0; j < numLegal; j++) {
-            if(legalMoves[j] == mv) {
-                isLegal = true;
-                break;
-            }
-        }
-        if(!isLegal) break;
-
-        cout << BoardUtils::moveToString(mv) << ' ';
-        board->makeMove(mv);
-        madeMoves[madeCount++] = mv;
-
-        // Do not print any subsequent PV moves after a draw condition is reached
-        if(board->isDraw()) break;
-    }
-    for(int i = madeCount - 1; i >= 0; i--) {
-        board->unmakeMove(madeMoves[i]);
+        if(pvArray[i] == MoveUtils::NO_MOVE) break;
+        cout << BoardUtils::moveToString(pvArray[i]) << ' ';
     }
     cout << '\n';
     cout.flush();

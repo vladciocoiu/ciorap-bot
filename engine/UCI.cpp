@@ -40,17 +40,8 @@ vector<string> splitStr(string s) {
 }
 
 void UCI::UCICommunication() {
-    while(true) {
-        string inputString;
-        if(!getline(cin, inputString)) {
-            Search::timeOver = true;
-            {
-                std::lock_guard<std::mutex> lk(UCI::mtx);
-                UCI::quitFlag = true;
-            }
-            UCI::cv.notify_one();
-            break;
-        }
+    string inputString;
+    while(getline(cin, inputString)) {
         if(!inputString.empty() && inputString.back() == '\r') inputString.pop_back();
 
         if(inputString == "uci") {
@@ -78,16 +69,16 @@ void UCI::UCICommunication() {
         } else if(inputString == "stop") {
             Search::timeOver = true;
         } else if(inputString == "quit") {
-            Search::timeOver = true;
-            {
-                std::lock_guard<std::mutex> lk(UCI::mtx);
-                UCI::goCommand = inputString;
-                UCI::quitFlag = true;
-            }
-            UCI::cv.notify_one();
             break;
         }
     }
+
+    Search::timeOver = true;
+    {
+        std::lock_guard<std::mutex> lk(UCI::mtx);
+        UCI::quitFlag = true;
+    }
+    UCI::cv.notify_one();
 }
 
 void UCI::inputUCI() {
@@ -289,14 +280,15 @@ void UCI::inputGo() {
 
         // get current time;
         long long startTime = chrono::duration_cast<chrono::milliseconds>(chrono::system_clock::now().time_since_epoch()).count();
+        long long overhead = 50;
         
         // if move time is set, we can use it all for the current move
         if(moveTime != -1) {
             Search::infiniteTime = false;
-            Search::stopTime = startTime + max(5LL, moveTime - 50);
+            Search::stopTime = startTime + max(5LL, moveTime - overhead);
         } else if(time != -1) {
             Search::infiniteTime = false;
-            long long usable = max(5LL, time - 50);
+            long long usable = max(5LL, time - overhead);
             long long alloc = min(usable / 2, usable / max(1LL, movesToGo) + (inc * 3) / 4);
             Search::stopTime = startTime + max(5LL, alloc);
         }
