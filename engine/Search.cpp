@@ -358,7 +358,6 @@ int Search::alphaBeta(int alpha, int beta, short depth, short ply, bool doNull) 
         
         if(score > alpha) {
             currBestMove = moves[idx];
-            if(ply == 0) bestMove = currBestMove;
             assert(currBestMove != MoveUtils::NO_MOVE);
 
             if(score >= beta) {
@@ -434,6 +433,7 @@ pair<int, int> Search::root() {
         alpha = eval - ASP_INCREASE; // increase window for next iteration
         beta = eval + ASP_INCREASE;
 
+        if(pvArray[0] != MoveUtils::NO_MOVE) bestMove = pvArray[0];
         UCI::showSearchInfo(depth, nodesSearched+nodesQ, currStartTime, eval);
         currStartTime = chrono::duration_cast<chrono::milliseconds>(chrono::system_clock::now().time_since_epoch()).count();
 
