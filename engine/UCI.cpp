@@ -42,11 +42,21 @@ vector<string> splitStr(string s) {
 void UCI::UCICommunication() {
     while(true) {
         string inputString;
-        getline(cin, inputString);
+        if(!getline(cin, inputString)) {
+            Search::timeOver = true;
+            {
+                std::lock_guard<std::mutex> lk(UCI::mtx);
+                UCI::quitFlag = true;
+            }
+            UCI::cv.notify_one();
+            break;
+        }
+        if(!inputString.empty() && inputString.back() == '\r') inputString.pop_back();
 
         if(inputString == "uci") {
             inputUCI();
         } else if(inputString == "isready") {
+            std::lock_guard<std::mutex> lk(UCI::mtx);
             inputIsReady();
         } else if(inputString == "ucinewgame") {
             std::lock_guard<std::mutex> lk(UCI::mtx);
@@ -282,21 +292,14 @@ void UCI::inputGo() {
         
         // if move time is set, we can use it all for the current move
         if(moveTime != -1) {
-            time = moveTime;
-            movesToGo = 1;
-
-        // otherwise consider 
-        }
-        if(time != -1) {
             Search::infiniteTime = false;
-            time /= movesToGo;
+            Search::stopTime = startTime + max(5LL, moveTime - 50);
+        } else if(time != -1) {
+            Search::infiniteTime = false;
+            long long usable = max(5LL, time - 50);
+            long long alloc = min(usable / 2, usable / max(1LL, movesToGo) + (inc * 3) / 4);
+            Search::stopTime = startTime + max(5LL, alloc);
         }
-
-        if(time > 1000) time -= 500;
-        else if(time > 100) time -= 50;
-
-        // set the stop time
-        Search::stopTime = startTime + time + inc;
 
         std::pair<int, int> searchResult = Search::root();
         std::cout << "bestmove " << BoardUtils::moveToString(searchResult.first) << '\n';

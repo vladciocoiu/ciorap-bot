@@ -12,7 +12,7 @@ typedef unsigned long long U64;
 
 class Board {
 private:
-    stack<int> epStk, castleStk;
+    stack<int> epStk, castleStk, halfmoveStk;
 
     int pseudoLegalMoves[512];
     short generatePseudoLegalMoves();
@@ -29,6 +29,7 @@ public:
     int squares[64], turn;
     int whiteKingSquare, blackKingSquare;
     int ep;
+    int halfmoveClock;
     int repetitionIndex;
     int castleRights; // bit 0 -> white short, 1 -> white long, 2 -> black short, 3 -> black long
 

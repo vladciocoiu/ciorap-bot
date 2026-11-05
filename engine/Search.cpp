@@ -97,12 +97,17 @@ void Search::sortMoves(int *moves, int num, short ply) {
     int hashMoveDepth = transpositionTable->retrieveDepthMove();
     int hashMoveReplace = transpositionTable->retrieveReplaceMove();
 
-    // check legality of killer moves
+    // check legality of hash and killer moves
     bool killerLegal[2] = {false, false};
+    bool hashDepthLegal = false, hashReplaceLegal = false;
     for(int idx = 0; idx < num; idx++) {
         if(killerMoves[ply][0] == moves[idx]) killerLegal[0] = true;
         if(killerMoves[ply][1] == moves[idx]) killerLegal[1] = true;
+        if(hashMoveDepth == moves[idx]) hashDepthLegal = true;
+        if(hashMoveReplace == moves[idx]) hashReplaceLegal = true;
     }
+    if(!hashDepthLegal) hashMoveDepth = MoveUtils::NO_MOVE;
+    if(!hashReplaceLegal) hashMoveReplace = MoveUtils::NO_MOVE;
 
     // split the other moves into captures and non captures for easier sorting
     for(int idx = 0; idx < num; idx++) {
@@ -157,7 +162,7 @@ void Search::sortMoves(int *moves, int num, short ply) {
 // --- QUIESCENCE SEARCH --- 
 // only searching for captures at the end of a regular search in order to ensure the engine won't miss obvious tactics
 int Search::quiescence(int alpha, int beta) {
-    if(!(nodesQ & 4095) && !infiniteTime) {
+    if(!((nodesSearched + nodesQ) & 1023) && !infiniteTime && bestMove != MoveUtils::NO_MOVE) {
         long long currTime = chrono::duration_cast<chrono::milliseconds>(chrono::system_clock::now().time_since_epoch()).count();
         if(currTime >= stopTime) timeOver = true;
     }
@@ -211,7 +216,7 @@ int Search::alphaBeta(int alpha, int beta, short depth, short ply, bool doNull) 
     int pvNextIndex = pvIndex + MAX_DEPTH - ply;
     pvArray[pvIndex] = MoveUtils::NO_MOVE;
 
-    if(!(nodesSearched & 4095) && !infiniteTime && bestMove != MoveUtils::NO_MOVE) {
+    if(!((nodesSearched + nodesQ) & 1023) && !infiniteTime && bestMove != MoveUtils::NO_MOVE) {
         long long currTime = chrono::duration_cast<chrono::milliseconds>(chrono::system_clock::now().time_since_epoch()).count();
         if(currTime >= stopTime) timeOver = true;
     }
@@ -390,7 +395,6 @@ int Search::alphaBeta(int alpha, int beta, short depth, short ply, bool doNull) 
 }
 
 pair<int, int> Search::root() {
-    board->repetitionIndex = 0;
     bestMove = MoveUtils::NO_MOVE;
 
     timeOver = false;
@@ -506,9 +510,32 @@ void Search::showPV(int depth) {
     assert(depth <= MAX_DEPTH);
 
     cout << "pv ";
+    int madeMoves[MAX_DEPTH];
+    int madeCount = 0;
     for(int i = 0; i < depth; i++) {
-        if(pvArray[i] == MoveUtils::NO_MOVE) break;
-        cout << BoardUtils::moveToString(pvArray[i]) << ' ';
+        int mv = pvArray[i];
+        if(mv == MoveUtils::NO_MOVE) break;
+
+        int legalMoves[256];
+        int numLegal = board->generateLegalMoves(legalMoves);
+        bool isLegal = false;
+        for(int j = 0; j < numLegal; j++) {
+            if(legalMoves[j] == mv) {
+                isLegal = true;
+                break;
+            }
+        }
+        if(!isLegal) break;
+
+        cout << BoardUtils::moveToString(mv) << ' ';
+        board->makeMove(mv);
+        madeMoves[madeCount++] = mv;
+
+        // Do not print any subsequent PV moves after a draw condition is reached
+        if(board->isDraw()) break;
+    }
+    for(int i = madeCount - 1; i >= 0; i--) {
+        board->unmakeMove(madeMoves[i]);
     }
     cout << '\n';
     cout.flush();
