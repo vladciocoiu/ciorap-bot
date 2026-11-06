@@ -362,6 +362,7 @@ int Search::alphaBeta(int alpha, int beta, short depth, short ply, bool doNull) 
             assert(currBestMove != MoveUtils::NO_MOVE);
 
             if(score >= beta) {
+                if(ply == 0) pvArray[0] = currBestMove;
                 transpositionTable->recordHash(depth, beta, TranspositionTable::HASH_F_BETA, currBestMove, ply);
 
                 if(!MoveUtils::isCapture(moves[idx]) && !MoveUtils::isPromotion(moves[idx])) {
@@ -421,22 +422,23 @@ pair<int, int> Search::root() {
 
         // --- ASPIRATION WINDOW --- 
         // we start with a full width search (alpha = -inf and beta = inf), modifying them accordingly
-        // if we fall outside the current window, we widen it exponentially before falling back to full width
+        // if we fall outside the current window, widen once by 150cp before falling back to full width
         if(curEval <= alpha) {
-            alpha = (delta > 1000) ? -INF : max(curEval - delta, -INF);
-            delta *= 2;
+            alpha = (delta > 200) ? -INF : max(curEval - delta, -INF);
+            delta *= 3;
             continue;
         }
         if(curEval >= beta) {
-            beta = (delta > 1000) ? INF : min(curEval + delta, INF);
-            delta *= 2;
+            if(pvArray[0] != MoveUtils::NO_MOVE) bestMove = pvArray[0];
+            beta = (delta > 200) ? INF : min(curEval + delta, INF);
+            delta *= 3;
             continue;
         }
 
         eval = curEval;
-        delta = ASP_INCREASE;
-        alpha = max(eval - delta, -INF); // set window for next iteration
-        beta = min(eval + delta, INF);
+        delta = ASP_INCREASE * 3; // 150cp step if next iteration fails low/high
+        alpha = max(eval - ASP_INCREASE, -INF);
+        beta = min(eval + ASP_INCREASE, INF);
 
         if(pvArray[0] != MoveUtils::NO_MOVE) bestMove = pvArray[0];
         UCI::showSearchInfo(depth, nodesSearched+nodesQ, currStartTime, eval);
