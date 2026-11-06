@@ -29,7 +29,8 @@ const int Search::INF = 1000000;
 const int Search::MATE_EVAL = INF-1;
 const int Search::MATE_THRESHOLD = MATE_EVAL/2;
 
-long long Search::stopTime;
+long long Search::softStopTime;
+long long Search::hardStopTime;
 bool Search::infiniteTime;
 
 int Search::nodesSearched = 0;
@@ -164,7 +165,7 @@ void Search::sortMoves(int *moves, int num, short ply) {
 int Search::quiescence(int alpha, int beta) {
     if(!((nodesSearched + nodesQ) & 1023) && !infiniteTime && bestMove != MoveUtils::NO_MOVE) {
         long long currTime = chrono::duration_cast<chrono::milliseconds>(chrono::system_clock::now().time_since_epoch()).count();
-        if(currTime >= stopTime) timeOver = true;
+        if(currTime >= hardStopTime) timeOver = true;
     }
     if(timeOver) return 0;
     nodesQ++;
@@ -218,7 +219,7 @@ int Search::alphaBeta(int alpha, int beta, short depth, short ply, bool doNull) 
 
     if(!((nodesSearched + nodesQ) & 1023) && !infiniteTime && bestMove != MoveUtils::NO_MOVE) {
         long long currTime = chrono::duration_cast<chrono::milliseconds>(chrono::system_clock::now().time_since_epoch()).count();
-        if(currTime >= stopTime) timeOver = true;
+        if(currTime >= hardStopTime) timeOver = true;
     }
     if(timeOver) return 0;
     nodesSearched++;
@@ -396,8 +397,6 @@ int Search::alphaBeta(int alpha, int beta, short depth, short ply, bool doNull) 
 pair<int, int> Search::root() {
     bestMove = MoveUtils::NO_MOVE;
 
-    timeOver = false;
-
     int alpha = -INF, beta = INF;
     int eval = 0;
 
@@ -435,9 +434,15 @@ pair<int, int> Search::root() {
 
         if(pvArray[0] != MoveUtils::NO_MOVE) bestMove = pvArray[0];
         UCI::showSearchInfo(depth, nodesSearched+nodesQ, currStartTime, eval);
-        currStartTime = chrono::duration_cast<chrono::milliseconds>(chrono::system_clock::now().time_since_epoch()).count();
+        long long now = chrono::duration_cast<chrono::milliseconds>(chrono::system_clock::now().time_since_epoch()).count();
+        currStartTime = now;
 
         depth++; // increase depth only if we are inside the window
+
+        // --- SOFT TIME LIMIT ---
+        // Check soft stop after completing a full depth iteration so we don't start
+        // a new depth that we likely won't finish
+        if(!infiniteTime && now >= softStopTime) break;
     }
 
     int moveToPlay = bestMove;
@@ -449,6 +454,7 @@ pair<int, int> Search::root() {
     }
     assert(moveToPlay != MoveUtils::NO_MOVE);
 
+    timeOver = false;
     return {moveToPlay, eval};
 }
 

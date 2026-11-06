@@ -46,7 +46,8 @@ public:
 
     static const int MAX_DEPTH;
     static int currMaxDepth;
-    static long long stopTime;
+    static long long softStopTime;
+    static long long hardStopTime;
     static bool infiniteTime;
     static bool timeOver;
 
