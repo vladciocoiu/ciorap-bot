@@ -241,6 +241,7 @@ void UCI::inputGo() {
         }
 
         // loop through words
+        bool didQuiescence = false;
         for(unsigned int i = 0; i < parsedInput.size(); i++) {
             // only do a quiescence search
             if(parsedInput[i] == "quiescence") {
@@ -249,7 +250,8 @@ void UCI::inputGo() {
                 std::cout.flush();
                 UCI::startFlag = false;
                 UCI::cv.notify_all();
-                return;
+                didQuiescence = true;
+                break;
             }
 
             // get time and increment according to our color 
@@ -281,7 +283,8 @@ void UCI::inputGo() {
                 depth = stoi(parsedInput[i+1]);
             }
         }
-// 
+        if(didQuiescence) continue;
+
         // if depth is specified, we change the max depth, otherwise we leave it at 100
         Search::currMaxDepth = depth;
 
