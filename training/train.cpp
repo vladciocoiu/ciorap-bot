@@ -5,10 +5,20 @@
 #include <iostream>
 #include <cmath>
 #include <cassert>
+#include <random>
+#include <chrono>
+#include <algorithm>
+#include <thread>
+#include <cstdio>
+#include <unistd.h>
+#include <sys/wait.h>
 
 #include "../engine/Evaluate.h"
 #include "../engine/Board.h"
+#include "../engine/Search.h"
 #include "../engine/TranspositionTable.h"
+#include "../engine/MoveUtils.h"
+#include "../engine/Enums.h"
 
 using namespace std;
 
@@ -266,15 +276,359 @@ void printParams(const EvalParams& p, const string& output_file) {
     fout.close();
 }
 
+// --- SELF-PLAY DATA GENERATION ---
+
+static const string STARTPOS_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
+static const int MAX_POSITIONS_PER_GAME = 25;
+static const int OPENING_RANDOM_PLIES = 8;
+
+bool setupRandomOpening(mt19937& rng) {
+    board->loadFenPos(STARTPOS_FEN);
+    Search::infiniteTime = true;
+    Search::timeOver = false;
+
+    uniform_int_distribution<int> pctDist(0, 99);
+
+    for(int ply = 0; ply < OPENING_RANDOM_PLIES; ply++) {
+        int moves[256];
+        int num = board->generateLegalMoves(moves);
+        if(num == 0 || board->isDraw()) return false;
+
+        int moveScores[256];
+        int bestScore = -1000000;
+
+        for(int i = 0; i < num; i++) {
+            board->makeMove(moves[i]);
+            int sc = -Search::quiescence(-1000000, 1000000);
+            board->unmakeMove(moves[i]);
+            moveScores[i] = sc;
+            if(sc > bestScore) bestScore = sc;
+        }
+
+        // 85% of the time pick a move within 120cp of the best move;
+        // 15% of the time allow a wider margin (300cp) to sample suboptimal squares/penalties
+        int margin = (pctDist(rng) < 85) ? 120 : 300;
+        vector<int> candidates;
+        for(int i = 0; i < num; i++) {
+            if(moveScores[i] >= bestScore - margin) {
+                candidates.push_back(moves[i]);
+            }
+        }
+        if(candidates.empty()) return false;
+
+        uniform_int_distribution<size_t> pickDist(0, candidates.size() - 1);
+        board->makeMove(candidates[pickDist(rng)]);
+    }
+
+    int moves[256];
+    if(board->generateLegalMoves(moves) == 0 || board->isDraw()) return false;
+
+    int exitScore = Search::quiescence(-1000000, 1000000);
+    return abs(exitScore) <= 600;
+}
+
+void runDatagenWorker(int workerId, const string& shardFile, int targetPositions, int searchDepth) {
+    uint64_t seed = chrono::high_resolution_clock::now().time_since_epoch().count();
+    seed ^= (uint64_t)getpid() * 0x9e3779b97f4a7c15ULL + (uint64_t)workerId * 1337ULL;
+    mt19937 rng(seed);
+
+    ofstream fout(shardFile);
+    if(!fout.is_open()) {
+        cerr << "Worker " << workerId << " failed to open " << shardFile << '\n';
+        return;
+    }
+
+    int collectedPositions = 0;
+    int gamesPlayed = 0;
+    int whiteWins = 0, blackWins = 0, draws = 0;
+    auto startTime = chrono::steady_clock::now();
+
+    while(collectedPositions < targetPositions) {
+        Search::clearHistory();
+        if(!setupRandomOpening(rng)) continue;
+
+        vector<string> gameQuietFens;
+        gameQuietFens.reserve(64);
+
+        string outcome = "1/2-1/2";
+        int winAdjStreak = 0;
+        int lastWinSign = 0;
+        int drawAdjStreak = 0;
+
+        for(int ply = OPENING_RANDOM_PLIES; ply < 400; ply++) {
+            int moves[256];
+            int num = board->generateLegalMoves(moves);
+            if(num == 0) {
+                if(board->isInCheck()) {
+                    outcome = (board->turn == White) ? "0-1" : "1-0";
+                } else {
+                    outcome = "1/2-1/2";
+                }
+                break;
+            }
+            if(board->isDraw()) {
+                outcome = "1/2-1/2";
+                break;
+            }
+
+            // Record position if quiet
+            if(!board->isInCheck()) {
+                Search::infiniteTime = true;
+                Search::timeOver = false;
+                int staticEv = evaluate();
+                int qEv = Search::quiescence(-1000000, 1000000);
+                if(staticEv == qEv && abs(staticEv) < 3000) {
+                    gameQuietFens.push_back(board->getFenFromCurrPos());
+                }
+            }
+
+            // Search move to fixed depth with stdout muted
+            Search::currMaxDepth = searchDepth;
+            Search::infiniteTime = true;
+            Search::timeOver = false;
+
+            cout.setstate(ios_base::failbit);
+            pair<int, int> searchRes = Search::root();
+            cout.clear();
+
+            int bestMove = searchRes.first;
+            int score = searchRes.second;
+            int whiteScore = (board->turn == White) ? score : -score;
+
+            board->makeMove(bestMove);
+
+            // Win/Loss adjudication: |whiteScore| >= 1000 cp for 4 consecutive plies
+            if(abs(whiteScore) >= 1000) {
+                int sign = (whiteScore > 0) ? 1 : -1;
+                if(sign == lastWinSign) winAdjStreak++;
+                else {
+                    lastWinSign = sign;
+                    winAdjStreak = 1;
+                }
+                if(winAdjStreak >= 4) {
+                    outcome = (sign > 0) ? "1-0" : "0-1";
+                    break;
+                }
+            } else {
+                winAdjStreak = 0;
+                lastWinSign = 0;
+            }
+
+            // Draw adjudication: |whiteScore| <= 15 cp for 8 consecutive plies after ply 80
+            if(ply >= 80 && abs(whiteScore) <= 15) {
+                drawAdjStreak++;
+                if(drawAdjStreak >= 8) {
+                    outcome = "1/2-1/2";
+                    break;
+                }
+            } else {
+                drawAdjStreak = 0;
+            }
+        }
+
+        if(outcome == "1-0") whiteWins++;
+        else if(outcome == "0-1") blackWins++;
+        else draws++;
+        gamesPlayed++;
+
+        // Cap at MAX_POSITIONS_PER_GAME (25) quiet positions per game
+        if((int)gameQuietFens.size() > MAX_POSITIONS_PER_GAME) {
+            shuffle(gameQuietFens.begin(), gameQuietFens.end(), rng);
+            gameQuietFens.resize(MAX_POSITIONS_PER_GAME);
+        }
+
+        for(const string& fen : gameQuietFens) {
+            if(collectedPositions >= targetPositions) break;
+            fout << fen << " \"" << outcome << "\"\n";
+            collectedPositions++;
+        }
+
+        if(workerId == 0 && gamesPlayed % 20 == 0) {
+            auto now = chrono::steady_clock::now();
+            double elapsedSec = max(0.001, chrono::duration<double>(now - startTime).count());
+            double posPerSec = collectedPositions / elapsedSec;
+            cout << "[Worker 0] Games: " << gamesPlayed
+                 << " | Positions: " << collectedPositions << "/" << targetPositions
+                 << " (" << (int)posPerSec << " pos/s per worker)"
+                 << " | W/D/L: " << whiteWins << "/" << draws << "/" << blackWins << '\n';
+            cout.flush();
+        }
+    }
+
+    fout.close();
+}
+
+int runSelfPlayDatagen(const string& outputFile, int totalPositions, int numWorkers, int searchDepth) {
+    if(numWorkers <= 0) {
+        numWorkers = max(1u, thread::hardware_concurrency());
+    }
+    cout << "Starting self-play data generation:\n"
+         << "  Output file      : " << outputFile << "\n"
+         << "  Target positions : " << totalPositions << "\n"
+         << "  Workers          : " << numWorkers << "\n"
+         << "  Search depth     : " << searchDepth << "\n"
+         << "  Max pos / game   : " << MAX_POSITIONS_PER_GAME << "\n";
+
+    auto startTime = chrono::steady_clock::now();
+    vector<pid_t> children;
+    vector<string> shardFiles;
+
+    int baseQuota = totalPositions / numWorkers;
+    int remainder = totalPositions % numWorkers;
+
+    for(int w = 0; w < numWorkers; w++) {
+        int quota = baseQuota + (w < remainder ? 1 : 0);
+        if(quota <= 0) continue;
+
+        string shard = outputFile + ".part." + to_string(w);
+        shardFiles.push_back(shard);
+
+        pid_t pid = fork();
+        if(pid < 0) {
+            cerr << "Failed to fork worker " << w << '\n';
+            return 1;
+        } else if(pid == 0) {
+            // Child process
+            runDatagenWorker(w, shard, quota, searchDepth);
+            _exit(0);
+        } else {
+            children.push_back(pid);
+        }
+    }
+
+    // Wait for all worker processes to complete
+    for(pid_t pid : children) {
+        int status = 0;
+        waitpid(pid, &status, 0);
+    }
+
+    // Merge and shuffle all worker shards
+    vector<string> allLines;
+    allLines.reserve(totalPositions);
+
+    for(const string& shard : shardFiles) {
+        ifstream fin(shard);
+        string line;
+        while(getline(fin, line)) {
+            if(!line.empty()) allLines.push_back(line);
+        }
+        fin.close();
+        remove(shard.c_str());
+    }
+
+    mt19937 rng(1337);
+    shuffle(allLines.begin(), allLines.end(), rng);
+
+    ofstream fout(outputFile);
+    if(!fout.is_open()) {
+        cerr << "Error opening output file: " << outputFile << '\n';
+        return 1;
+    }
+    for(const string& line : allLines) {
+        fout << line << '\n';
+    }
+    fout.close();
+
+    auto endTime = chrono::steady_clock::now();
+    double totalSec = max(0.001, chrono::duration<double>(endTime - startTime).count());
+    cout << "Self-play datagen complete! Wrote " << allLines.size() << " shuffled quiet positions to "
+         << outputFile << " in " << totalSec << "s (" << (int)(allLines.size() / totalSec) << " pos/s).\n";
+    return 0;
+}
+
+int runFilterQuiet(const string& inputFile, const string& outputFile) {
+    createPosVector(inputFile, 0);
+    if(positions.empty()) {
+        cerr << "No positions loaded from " << inputFile << '\n';
+        return 1;
+    }
+
+    Search::infiniteTime = true;
+    Search::timeOver = false;
+
+    vector<string> quietLines;
+    quietLines.reserve(positions.size());
+
+    for(size_t i = 0; i < positions.size(); i++) {
+        board->loadFenPos(positions[i].fen);
+        if(board->isInCheck()) continue;
+
+        int staticEv = evaluate();
+        int qEv = Search::quiescence(-1000000, 1000000);
+        if(staticEv == qEv && abs(staticEv) < 3000) {
+            string outcome = "1/2-1/2";
+            if(positions[i].result > 0.75) outcome = "1-0";
+            else if(positions[i].result < 0.25) outcome = "0-1";
+            quietLines.push_back(positions[i].fen + " \"" + outcome + "\"");
+        }
+
+        if((i + 1) % 10000 == 0) {
+            cout << "Checked " << (i + 1) << "/" << positions.size()
+                 << " positions (kept " << quietLines.size() << " quiet)...\n";
+        }
+    }
+
+    mt19937 rng(1337);
+    shuffle(quietLines.begin(), quietLines.end(), rng);
+
+    ofstream fout(outputFile);
+    for(const string& line : quietLines) {
+        fout << line << '\n';
+    }
+    fout.close();
+
+    cout << "Filtered " << positions.size() << " -> " << quietLines.size()
+         << " quiet positions written to " << outputFile << ".\n";
+    return 0;
+}
+
+void printUsage(const char* prog) {
+    cout << "Usage:\n"
+         << "  " << prog << " --datagen <output_file> <num_positions> [num_workers] [depth]\n"
+         << "  " << prog << " --filter-quiet <input_file> <output_file>\n";
+}
+
 int main(int argc, char **argv) {
     board = new Board();
     transpositionTable = new TranspositionTable();
     init();
 
+    if(argc >= 2 && string(argv[1]) == "--datagen") {
+        if(argc < 4) {
+            printUsage(argv[0]);
+            delete transpositionTable;
+            delete board;
+            return 1;
+        }
+        string outputFile = argv[2];
+        int totalPositions = atoi(argv[3]);
+        int numWorkers = (argc >= 5) ? atoi(argv[4]) : (int)max(1u, thread::hardware_concurrency());
+        int searchDepth = (argc >= 6) ? atoi(argv[5]) : 5;
+
+        int rc = runSelfPlayDatagen(outputFile, totalPositions, numWorkers, searchDepth);
+        delete transpositionTable;
+        delete board;
+        return rc;
+    }
+
+    if(argc >= 2 && string(argv[1]) == "--filter-quiet") {
+        if(argc < 4) {
+            printUsage(argv[0]);
+            delete transpositionTable;
+            delete board;
+            return 1;
+        }
+        int rc = runFilterQuiet(argv[2], argv[3]);
+        delete transpositionTable;
+        delete board;
+        return rc;
+    }
+
     vector<int> vec = paramsToVector(defaultEvalParams);
     EvalParams roundTrip = vectorToParams(vec);
     assert(paramsToVector(roundTrip) == vec);
     cout << "Texel trainer initialized (" << vec.size() << " total parameters).\n";
+    printUsage(argv[0]);
 
     delete transpositionTable;
     delete board;
