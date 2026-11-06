@@ -362,7 +362,6 @@ int Search::alphaBeta(int alpha, int beta, short depth, short ply, bool doNull) 
             assert(currBestMove != MoveUtils::NO_MOVE);
 
             if(score >= beta) {
-                if(ply == 0) pvArray[0] = currBestMove;
                 transpositionTable->recordHash(depth, beta, TranspositionTable::HASH_F_BETA, currBestMove, ply);
 
                 if(!MoveUtils::isCapture(moves[idx]) && !MoveUtils::isPromotion(moves[idx])) {
@@ -429,7 +428,6 @@ pair<int, int> Search::root() {
             continue;
         }
         if(curEval >= beta) {
-            if(pvArray[0] != MoveUtils::NO_MOVE) bestMove = pvArray[0];
             beta = (delta > 200) ? INF : min(curEval + delta, INF);
             delta *= 3;
             continue;
