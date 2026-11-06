@@ -23,6 +23,7 @@ private:
     static const int ASP_INCREASE;
 
     // --- MOVE ORDERING ---
+    static int seeMove(int move);
     static int captureScore(int move);
     static int nonCaptureScore(int move);
     static bool cmpCapturesInv(int a, int b);

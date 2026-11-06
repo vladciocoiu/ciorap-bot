@@ -43,6 +43,105 @@ int Search::pvArray[(MAX_DEPTH * MAX_DEPTH + MAX_DEPTH) / 2 + MAX_DEPTH];
 
 const int Search::ASP_INCREASE = 50;
 
+static const int SEE_PIECE_VALUES[7] = {0, 100, 325, 350, 500, 975, 20000};
+
+// --- STATIC EXCHANGE EVALUATION ---
+// returns the material gain (in centipawns) of a capture, assuming both sides
+// recapture with their least valuable attacker until no more captures are possible
+int Search::seeMove(int move) {
+    if(!MoveUtils::isCapture(move) && !MoveUtils::isPromotion(move)) return 0;
+
+    int from = MoveUtils::getFromSq(move);
+    int to = MoveUtils::getToSq(move);
+
+    int gain[32];
+    int d = 0;
+
+    int attackerPiece = MoveUtils::getPiece(move);
+    if(attackerPiece < Pawn || attackerPiece > King) return 0;
+
+    // initial gain: captured piece value (or promotion bonus)
+    int capturedValue = 0;
+    if(MoveUtils::isEP(move)) {
+        capturedValue = SEE_PIECE_VALUES[Pawn];
+    } else if(MoveUtils::isCapture(move)) {
+        int capturedPiece = MoveUtils::getCapturedPiece(move);
+        if(capturedPiece >= Pawn && capturedPiece <= King)
+            capturedValue = SEE_PIECE_VALUES[capturedPiece];
+    }
+
+    if(MoveUtils::isPromotion(move)) {
+        int promoPiece = MoveUtils::getPromotionPiece(move);
+        if(promoPiece >= Pawn && promoPiece <= King) {
+            capturedValue += SEE_PIECE_VALUES[promoPiece] - SEE_PIECE_VALUES[Pawn];
+            attackerPiece = promoPiece;
+        }
+    }
+    gain[0] = capturedValue;
+
+    // simulate occupancy: remove initial attacker from 'from' and clear 'to'
+    U64 occ = (board->whitePiecesBB | board->blackPiecesBB);
+    occ &= ~BoardUtils::bits[from];
+    occ &= ~BoardUtils::bits[to];
+    if(MoveUtils::isEP(move)) {
+        int epPawnSq = ((from >> 3) << 3) | (to & 7);
+        occ &= ~BoardUtils::bits[epPawnSq];
+    }
+
+    int side = board->turn ^ 8; // opponent to move next
+
+    // the contested square is always 'to'; X-ray attackers are recomputed from it
+    // each iteration after the occupancy is updated
+    while(d < 31) {
+        U64 sidePieces = (side == White ? board->whitePiecesBB : board->blackPiecesBB) & occ;
+
+        U64 pawns = sidePieces & board->pawnsBB;
+        U64 knights = sidePieces & board->knightsBB;
+        U64 bishops = sidePieces & board->bishopsBB;
+        U64 rooks = sidePieces & board->rooksBB;
+        U64 queens = sidePieces & board->queensBB;
+        U64 king = sidePieces & (side == White ? BoardUtils::bits[board->whiteKingSquare] : BoardUtils::bits[board->blackKingSquare]);
+
+        U64 attackers = 0;
+        attackers |= (BoardUtils::pawnAttacks(BoardUtils::bits[to], side ^ 8) & pawns);
+        attackers |= (BoardUtils::knightAttacksBB[to] & knights);
+        attackers |= (MagicBitboardUtils::magicBishopAttacks(occ, to) & (bishops | queens));
+        attackers |= (MagicBitboardUtils::magicRookAttacks(occ, to) & (rooks | queens));
+        attackers |= (BoardUtils::kingAttacksBB[to] & king);
+
+        if(!attackers) break;
+
+        // pick least valuable attacker
+        int nextAttackerPiece = 0;
+        U64 cand;
+        if((cand = attackers & pawns)) { nextAttackerPiece = Pawn; }
+        else if((cand = attackers & knights)) { nextAttackerPiece = Knight; }
+        else if((cand = attackers & bishops)) { nextAttackerPiece = Bishop; }
+        else if((cand = attackers & rooks)) { nextAttackerPiece = Rook; }
+        else if((cand = attackers & queens)) { nextAttackerPiece = Queen; }
+        else { cand = attackers & king; nextAttackerPiece = King; }
+
+        int attackerFrom = MagicBitboardUtils::bitscanForward(cand);
+
+        d++;
+        gain[d] = SEE_PIECE_VALUES[attackerPiece] - gain[d-1];
+
+        // if a king was just captured, the previous king capture was illegal; stop here
+        if(attackerPiece == King) break;
+
+        attackerPiece = nextAttackerPiece;
+        occ &= ~BoardUtils::bits[attackerFrom];
+        side ^= 8;
+    }
+
+    // negamax the gain array: each side may decline to recapture if it loses material
+    while(d > 0) {
+        gain[d-1] = -max(-gain[d-1], gain[d]);
+        d--;
+    }
+
+    return gain[0];
+}
 
 // --- MOVE ORDERING ---
 int Search::captureScore(int move) {
@@ -129,11 +228,17 @@ void Search::sortMoves(int *moves, int num, short ply) {
     if (hashMoveReplace != MoveUtils::NO_MOVE 
     && hashMoveReplace != hashMoveDepth) moves[newNum++] = hashMoveReplace;
     
-    // add captures sorted by MVV-LVA (only winning / equal captures first)
-    sort(captures, captures + nCaptures, cmpCapturesInv); // descending order because we add them from the end
-    while(nCaptures && captureScore(captures[nCaptures-1]) >= 0) {
-        moves[newNum++] = captures[--nCaptures];
+    // split captures into winning (SEE >= 0) and losing (SEE < 0)
+    int winningCaptures[256], losingCaptures[256];
+    unsigned int nWinning = 0, nLosing = 0;
+    for(unsigned int idx = 0; idx < nCaptures; idx++) {
+        if(seeMove(captures[idx]) >= 0) winningCaptures[nWinning++] = captures[idx];
+        else losingCaptures[nLosing++] = captures[idx];
     }
+
+    // add winning captures sorted by MVV-LVA
+    sort(winningCaptures, winningCaptures + nWinning, cmpCapturesInv);
+    while(nWinning) moves[newNum++] = winningCaptures[--nWinning];
 
     // add killer moves
     if(killerLegal[0] 
@@ -152,10 +257,9 @@ void Search::sortMoves(int *moves, int num, short ply) {
     for(unsigned int idx = 0; idx < nNonCaptures; idx++)
         moves[newNum++] = nonCaptures[idx];
 
-    // add losing captures
-    while(nCaptures) {
-        moves[newNum++] = captures[--nCaptures];
-    }
+    // add losing captures last
+    sort(losingCaptures, losingCaptures + nLosing, cmpCapturesInv);
+    while(nLosing) moves[newNum++] = losingCaptures[--nLosing];
 
     assert(newNum == num);
 }
@@ -182,7 +286,8 @@ int Search::quiescence(int alpha, int beta) {
 
     sortMoves(moves, num, -1);
     for(int idx = 0; idx < num; idx++)  {
-        // if(MoveUtils::isCapture(moves[idx]) && (seeMove(moves[idx]) < 0)) continue;
+        // skip losing captures in quiescence
+        if(MoveUtils::isCapture(moves[idx]) && seeMove(moves[idx]) < 0) continue;
 
         // --- DELTA PRUNING --- 
         // we test if each move has the potential to raise alpha
