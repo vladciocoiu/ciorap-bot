@@ -74,6 +74,7 @@ jobs:
             -openings file=2moves_v1.pgn format=pgn order=random \
             -rounds 500 \
             -repeat \
+            -recover \
             -concurrency 2 \
             -pgnout file=match_results.pgn
 

@@ -5,6 +5,7 @@
 #include <unordered_map>
 #include <mutex>
 #include <condition_variable>
+#include <algorithm>
 
 #include "Board.h"
 #include "Search.h"
@@ -47,21 +48,26 @@ void UCI::UCICommunication() {
         if(inputString == "uci") {
             inputUCI();
         } else if(inputString == "isready") {
-            std::lock_guard<std::mutex> lk(UCI::mtx);
+            std::unique_lock<std::mutex> lk(UCI::mtx);
+            UCI::cv.wait(lk, []{ return !UCI::startFlag; });
             inputIsReady();
         } else if(inputString == "ucinewgame") {
-            std::lock_guard<std::mutex> lk(UCI::mtx);
+            std::unique_lock<std::mutex> lk(UCI::mtx);
+            UCI::cv.wait(lk, []{ return !UCI::startFlag; });
             inputUCINewGame();
         } else if(inputString.substr(0, 8) == "position") {
-            std::lock_guard<std::mutex> lk(UCI::mtx);
+            std::unique_lock<std::mutex> lk(UCI::mtx);
+            UCI::cv.wait(lk, []{ return !UCI::startFlag; });
             inputPosition(inputString);
         } else if(inputString.substr(0, 2) == "go") {
             {
-                std::lock_guard<std::mutex> lk(UCI::mtx);
+                std::unique_lock<std::mutex> lk(UCI::mtx);
+                UCI::cv.wait(lk, []{ return !UCI::startFlag; });
+                Search::timeOver = false;
                 UCI::goCommand = inputString;
                 UCI::startFlag = true;
             }
-            UCI::cv.notify_one();
+            UCI::cv.notify_all();
         } else if(inputString.substr(0, 5) == "print") {
             printBoard(inputString.length() <= 6 || inputString.substr(6, 3) != "num");
         } else if(inputString.substr(0, 4) == "eval") {
@@ -78,7 +84,7 @@ void UCI::UCICommunication() {
         std::lock_guard<std::mutex> lk(UCI::mtx);
         UCI::quitFlag = true;
     }
-    UCI::cv.notify_one();
+    UCI::cv.notify_all();
 }
 
 void UCI::inputUCI() {
@@ -217,8 +223,6 @@ void UCI::inputGo() {
 
         if(UCI::quitFlag) return;
 
-        UCI::startFlag = false;
-
         vector<string> parsedInput = splitStr(UCI::goCommand);
 
         // do a perft and then continue if it is requested
@@ -230,6 +234,9 @@ void UCI::inputGo() {
             long long nps = 1000LL*num/time;
 
             std::cout << "nodes " << num << " time " << time << " nps " << nps << '\n';
+            std::cout.flush();
+            UCI::startFlag = false;
+            UCI::cv.notify_all();
             continue;
         }
 
@@ -239,6 +246,9 @@ void UCI::inputGo() {
             if(parsedInput[i] == "quiescence") {
                 int score = Search::quiescence(-1000000, 1000000);
                 std::cout << score * (board->turn == Black ? -1 : 1) << '\n';
+                std::cout.flush();
+                UCI::startFlag = false;
+                UCI::cv.notify_all();
                 return;
             }
 
@@ -275,26 +285,44 @@ void UCI::inputGo() {
         // if depth is specified, we change the max depth, otherwise we leave it at 100
         Search::currMaxDepth = depth;
 
-        if(movesToGo != -1) movesToGo += 2;
-        else movesToGo = 80;
-
-        // get current time;
+        // get current time
         long long startTime = chrono::duration_cast<chrono::milliseconds>(chrono::system_clock::now().time_since_epoch()).count();
-        long long overhead = 50;
-        
-        // if move time is set, we can use it all for the current move
+        const long long MOVE_OVERHEAD = 50;
+
+        // if move time is set, we can use it all for the current move (minus overhead)
         if(moveTime != -1) {
             Search::infiniteTime = false;
-            Search::stopTime = startTime + max(5LL, moveTime - overhead);
+            long long usable = max(1LL, moveTime - MOVE_OVERHEAD);
+            Search::softStopTime = startTime + usable;
+            Search::hardStopTime = startTime + usable;
         } else if(time != -1) {
             Search::infiniteTime = false;
-            long long usable = max(5LL, time - overhead);
-            long long alloc = min(usable / 2, usable / max(1LL, movesToGo) + (inc * 3) / 4);
-            Search::stopTime = startTime + max(5LL, alloc);
+
+            long long usableTime = max(1LL, time - MOVE_OVERHEAD);
+            long long mtg = (movesToGo != -1) ? max(1LL, movesToGo) : 30LL;
+
+            // Target optimal time allocation for this move
+            long long optTime = (usableTime / mtg) + (inc * 3 / 4);
+            optTime = min(optTime, usableTime / 3);
+            optTime = max(optTime, 1LL);
+
+            // Soft stop: don't start a new depth if we've already used ~60% of optTime
+            long long softTime = max(1LL, optTime * 6 / 10);
+
+            // Hard stop: allow extending up to 2.0x optTime to finish an iteration or resolve a fail-low,
+            // strictly capped at 1/3 of remaining usable clock time.
+            long long hardTime = min(usableTime / 3, optTime * 2);
+            hardTime = max(hardTime, softTime);
+
+            Search::softStopTime = startTime + softTime;
+            Search::hardStopTime = startTime + hardTime;
         }
 
         std::pair<int, int> searchResult = Search::root();
         std::cout << "bestmove " << BoardUtils::moveToString(searchResult.first) << '\n';
         std::cout.flush();
+
+        UCI::startFlag = false;
+        UCI::cv.notify_all();
     }
 }
