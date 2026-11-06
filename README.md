@@ -18,9 +18,10 @@ This is a UCI-compatible chess engine with ~2100 Elo rating.
 - Move searching using alpha-beta algorithm and Principal Variation Search
 - Iterative deepening and aspiration windows
 - Transposition table using Zobrist hash
-- Move ordering using PV-move and MVV-LVA, killer move and history heuristics
-- Late move reductions
-- Quiescence search with delta-pruning
+- Move ordering using PV-move, Static Exchange Evaluation (SEE), MVV-LVA, killer move and history heuristics
+- Late move reductions, null move pruning, razoring, and futility pruning
+- Quiescence search with SEE and delta-pruning
+- Soft and hard time management limits
 
 ## Usage
 

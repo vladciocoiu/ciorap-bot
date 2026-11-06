@@ -28,11 +28,11 @@ jobs:
 
           cmake -S pr-branch -B pr-branch/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_POLICY_VERSION_MINIMUM=3.5
           cmake --build pr-branch/build --config Release -j 2
-          cp pr-branch/build/ciorap-bot-03 binaries/ciorap-bot-pr
+          cp pr-branch/build/ciorap-bot-* binaries/ciorap-bot-pr
 
           cmake -S master-branch -B master-branch/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_POLICY_VERSION_MINIMUM=3.5
           cmake --build master-branch/build --config Release -j 2
-          cp master-branch/build/ciorap-bot-03 binaries/ciorap-bot-master
+          cp master-branch/build/ciorap-bot-* binaries/ciorap-bot-master
 
           chmod +x binaries/ciorap-bot-pr binaries/ciorap-bot-master
 

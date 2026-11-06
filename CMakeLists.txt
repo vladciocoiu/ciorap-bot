@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.0)
-project(CiorapBot VERSION 0.3)
+project(CiorapBot VERSION 0.4)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -12,4 +12,4 @@ endif()
 # Add your source files here
 file(GLOB SOURCE_FILES "engine/*.cpp")
 
-add_executable(ciorap-bot-03 ${SOURCE_FILES})
+add_executable(ciorap-bot-04 ${SOURCE_FILES})

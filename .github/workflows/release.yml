@@ -1,0 +1,93 @@
+name: Release Binaries
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.artifact }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            artifact: ciorap-bot-04-windows-avx2.exe
+            cxx: g++
+            flags: -std=c++20 -O3 -flto -DNDEBUG -march=haswell -static -lpthread
+          - os: windows-latest
+            artifact: ciorap-bot-04-windows-x86-64.exe
+            cxx: g++
+            flags: -std=c++20 -O3 -flto -DNDEBUG -march=x86-64 -static -lpthread
+          - os: ubuntu-latest
+            artifact: ciorap-bot-04-linux-avx2
+            cxx: g++
+            flags: -std=c++20 -O3 -flto -DNDEBUG -march=haswell -static -pthread
+          - os: ubuntu-latest
+            artifact: ciorap-bot-04-linux-x86-64
+            cxx: g++
+            flags: -std=c++20 -O3 -flto -DNDEBUG -march=x86-64 -static -pthread
+          - os: macos-latest
+            artifact: ciorap-bot-04-macos-arm64
+            cxx: clang++
+            flags: -std=c++20 -O3 -flto -DNDEBUG -mcpu=apple-m1 -pthread
+          - os: macos-latest
+            artifact: ciorap-bot-04-macos-x86-64
+            cxx: clang++
+            flags: -std=c++20 -O3 -flto -DNDEBUG -arch x86_64 -march=haswell -pthread
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Compile Binary
+        shell: bash
+        run: |
+          mkdir -p dist
+          ${{ matrix.cxx }} ${{ matrix.flags }} engine/*.cpp -o dist/${{ matrix.artifact }}
+
+      - name: Smoke Test Binary
+        if: matrix.artifact != 'ciorap-bot-04-macos-x86-64'
+        shell: bash
+        run: |
+          {
+            echo "uci"
+            echo "isready"
+            echo "position startpos"
+            echo "go perft 4"
+            sleep 1
+            echo "quit"
+          } | ./dist/${{ matrix.artifact }} | tee smoke_output.txt
+          grep -q "id name CiorapBot 0.4" smoke_output.txt
+          grep -q "nodes 197281" smoke_output.txt
+
+      - name: Upload Build Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist/${{ matrix.artifact }}
+
+  release:
+    name: Publish GitHub Release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download All Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release-assets/*
+          generate_release_notes: true
+
