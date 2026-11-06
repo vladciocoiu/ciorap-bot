@@ -398,6 +398,7 @@ pair<int, int> Search::root() {
     bestMove = MoveUtils::NO_MOVE;
 
     int alpha = -INF, beta = INF;
+    int delta = ASP_INCREASE;
     int eval = 0;
 
     ageHistory();
@@ -420,17 +421,22 @@ pair<int, int> Search::root() {
 
         // --- ASPIRATION WINDOW --- 
         // we start with a full width search (alpha = -inf and beta = inf), modifying them accordingly
-        // if we fall outside the current window, we do a full width search with the same depth
-        // and if we stay inside the window, we only increase it by a small number, so that we can achieve more cutoffs
-        if(curEval <= alpha || curEval >= beta) {
-            alpha = -INF;
-            beta = INF;
+        // if we fall outside the current window, we widen it exponentially before falling back to full width
+        if(curEval <= alpha) {
+            alpha = (delta > 1000) ? -INF : max(curEval - delta, -INF);
+            delta *= 2;
+            continue;
+        }
+        if(curEval >= beta) {
+            beta = (delta > 1000) ? INF : min(curEval + delta, INF);
+            delta *= 2;
             continue;
         }
 
         eval = curEval;
-        alpha = eval - ASP_INCREASE; // increase window for next iteration
-        beta = eval + ASP_INCREASE;
+        delta = ASP_INCREASE;
+        alpha = max(eval - delta, -INF); // set window for next iteration
+        beta = min(eval + delta, INF);
 
         if(pvArray[0] != MoveUtils::NO_MOVE) bestMove = pvArray[0];
         UCI::showSearchInfo(depth, nodesSearched+nodesQ, currStartTime, eval);
