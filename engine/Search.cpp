@@ -136,7 +136,7 @@ int Search::seeMove(int move) {
 
     // negamax the gain array: each side may decline to recapture if it loses material
     while(d > 0) {
-        gain[d-1] = -max(-gain[d-1], gain[d]);
+        gain[d-1] = min(gain[d-1], -gain[d]);
         d--;
     }
 
