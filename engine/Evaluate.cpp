@@ -294,7 +294,7 @@ int evaluate(
     if(whiteAttackersCnt <= 2) whiteAttackWeight = 0;
     if(blackAttackersCnt <= 2) blackAttackWeight = 0;
 
-    mgKingScore += KING_SAFETY_TABLE[whiteAttackWeight] - KING_SAFETY_TABLE[blackAttackWeight];
+    mgKingScore += KING_SAFETY_TABLE[min(whiteAttackWeight, 99)] - KING_SAFETY_TABLE[min(blackAttackWeight, 99)];
     mgKingScore += MG_KING_TABLE[board->whiteKingSquare] - MG_KING_TABLE[FLIPPED[board->blackKingSquare]];
 
     egKingScore += EG_KING_TABLE[board->whiteKingSquare] - EG_KING_TABLE[FLIPPED[board->blackKingSquare]];
@@ -555,9 +555,9 @@ int evalRook(
             eval -= BLOCKED_ROOK_PENALTY;
     }
     if(color == Black) {
-        if((board->whiteKingSquare == f8 || board->whiteKingSquare == g8) && (sq == g8 || sq == h8))
+        if((board->blackKingSquare == f8 || board->blackKingSquare == g8) && (sq == g8 || sq == h8))
             eval -= BLOCKED_ROOK_PENALTY;
-        if((board->whiteKingSquare == c8 || board->whiteKingSquare == b8) && (sq == a8 || sq == b8))
+        if((board->blackKingSquare == c8 || board->blackKingSquare == b8) && (sq == a8 || sq == b8))
             eval -= BLOCKED_ROOK_PENALTY;
     }
 
@@ -808,7 +808,7 @@ int evalPawn(
     // check squares behind the pawn to see if it can be protected by other pawns
     curSq = sq;
     while(curSq < 64 && curSq >= 0) {
-        if(ourPawnAttacksBB & curSq) {
+        if(ourPawnAttacksBB & BoardUtils::bits[curSq]) {
             weak = false;
             break;
         }

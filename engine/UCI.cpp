@@ -23,12 +23,9 @@ bool UCI::startFlag, UCI::quitFlag;
 // for showing uci info
 string scoreToStr(int score) {
     // if it is a mate, we print "mate" + the number of moves until mate
-    if (abs(score) > Search::MATE_THRESHOLD) return "mate " + to_string((score > 0 ? Search::MATE_EVAL - score + 1 : -Search::MATE_EVAL - score) / 2);
+    if (abs(score) > Search::MATE_THRESHOLD) return "mate " + to_string((score > 0 ? Search::MATE_EVAL - score + 1 : -Search::MATE_EVAL - score - 1) / 2);
 
-    // the score is initially relative to the side to move, so we change it to be positive for white
-    if(board->turn == Black) score *= -1;
-
-    // if the score isn't a mate, we print it in centipawns
+    // if the score isn't a mate, we print it in centipawns (relative to the side to move per UCI spec)
     return "cp " + to_string(score);
 }
 
@@ -43,17 +40,20 @@ vector<string> splitStr(string s) {
 }
 
 void UCI::UCICommunication() {
-    while(true) {
-        string inputString;
-        getline(cin, inputString);
+    string inputString;
+    while(getline(cin, inputString)) {
+        if(!inputString.empty() && inputString.back() == '\r') inputString.pop_back();
 
         if(inputString == "uci") {
             inputUCI();
         } else if(inputString == "isready") {
+            std::lock_guard<std::mutex> lk(UCI::mtx);
             inputIsReady();
         } else if(inputString == "ucinewgame") {
+            std::lock_guard<std::mutex> lk(UCI::mtx);
             inputUCINewGame();
         } else if(inputString.substr(0, 8) == "position") {
+            std::lock_guard<std::mutex> lk(UCI::mtx);
             inputPosition(inputString);
         } else if(inputString.substr(0, 2) == "go") {
             {
@@ -69,37 +69,39 @@ void UCI::UCICommunication() {
         } else if(inputString == "stop") {
             Search::timeOver = true;
         } else if(inputString == "quit") {
-            Search::timeOver = true;
-            {
-                std::lock_guard<std::mutex> lk(UCI::mtx);
-                UCI::goCommand = inputString;
-                UCI::quitFlag = true;
-            }
-            UCI::cv.notify_one();
             break;
         }
     }
+
+    Search::timeOver = true;
+    {
+        std::lock_guard<std::mutex> lk(UCI::mtx);
+        UCI::quitFlag = true;
+    }
+    UCI::cv.notify_one();
 }
 
 void UCI::inputUCI() {
     std::cout << "id name " << engineName << '\n';
     std::cout << "id author Vlad Ciocoiu\n";
     std::cout << "uciok\n";
+    std::cout.flush();
 }
 
 void UCI::inputIsReady() {
     std::cout << "readyok\n";
+    std::cout.flush();
 }
 
 // prepare for a new game by clearing hash tables and history/killer tables
 void UCI::inputUCINewGame() {
     Search::clearHistory();
 
-    delete board;
-    board = new Board();
+    if(board == nullptr) board = new Board();
+    else board->clear();
 
-    delete transpositionTable;
-    transpositionTable = new TranspositionTable();
+    if(transpositionTable == nullptr) transpositionTable = new TranspositionTable();
+    else transpositionTable->clear();
 }
 
 void UCI::inputPosition(string input) {
@@ -172,7 +174,6 @@ void UCI::showSearchInfo(short depth, int nodes, int startTime, int score) {
 
     std::cout << "info score " << scoreToStr(score) << " depth " << depth << " nodes " 
          << nodes << " time " << time << " nps " << nps << " ";
-    std::cout.flush();
 
     // print principal variation
     Search::showPV(depth);
@@ -279,24 +280,18 @@ void UCI::inputGo() {
 
         // get current time;
         long long startTime = chrono::duration_cast<chrono::milliseconds>(chrono::system_clock::now().time_since_epoch()).count();
+        long long overhead = 50;
         
         // if move time is set, we can use it all for the current move
         if(moveTime != -1) {
-            time = moveTime;
-            movesToGo = 1;
-
-        // otherwise consider 
-        }
-        if(time != -1) {
             Search::infiniteTime = false;
-            time /= movesToGo;
+            Search::stopTime = startTime + max(5LL, moveTime - overhead);
+        } else if(time != -1) {
+            Search::infiniteTime = false;
+            long long usable = max(5LL, time - overhead);
+            long long alloc = min(usable / 2, usable / max(1LL, movesToGo) + (inc * 3) / 4);
+            Search::stopTime = startTime + max(5LL, alloc);
         }
-
-        if(time > 1000) time -= 500;
-        else if(time > 100) time -= 50;
-
-        // set the stop time
-        Search::stopTime = startTime + time + inc;
 
         std::pair<int, int> searchResult = Search::root();
         std::cout << "bestmove " << BoardUtils::moveToString(searchResult.first) << '\n';

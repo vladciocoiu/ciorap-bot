@@ -14,7 +14,7 @@
 
 using namespace std;
 
-Board::Board() : repetitionIndex(0), repetitionMap(new U64[1024]) {
+Board::Board() : halfmoveClock(0), repetitionIndex(0), repetitionMap(new U64[2048]) {
     clear();
 }
 
@@ -129,11 +129,14 @@ void init() {
     MagicBitboardUtils::initMagics();
 
     Search::clearHistory();
+    if(board == nullptr) board = new Board();
+    if(transpositionTable == nullptr) transpositionTable = new TranspositionTable();
 }
 
 void Board::clear() {
     for(int i = 0; i < 64; i++) this->squares[i] = Empty;
     whiteKingSquare = blackKingSquare = 0;
+    halfmoveClock = 0;
     repetitionIndex = 0;
 
     this->turn = White;
@@ -148,6 +151,7 @@ void Board::clear() {
     // clear stacks
     while(!castleStk.empty()) castleStk.pop();
     while(!epStk.empty()) epStk.pop();
+    while(!halfmoveStk.empty()) halfmoveStk.pop();
     while(!moveStk.empty()) moveStk.pop();
 }
 
@@ -245,6 +249,13 @@ void Board::loadFenPos(string input) {
     string epTargetSq;
     for(; input[i] != ' ' && i < input.length(); i++) 
         epTargetSq += input[i];
+    if(i < input.length()) i++;
+
+    string halfmoveStr;
+    for(; i < input.length() && input[i] != ' '; i++)
+        halfmoveStr += input[i];
+    if(!halfmoveStr.empty() && isdigit(halfmoveStr[0]))
+        this->halfmoveClock = stoi(halfmoveStr);
 
     unordered_map<char, int> pieceSymbols = {{'p', Pawn}, {'n', Knight},
     {'b', Bishop}, {'r', Rook}, {'q', Queen}, {'k', King}};
@@ -755,28 +766,28 @@ int Board::generateLegalMoves(int *moves) {
         if(ok) moves[num++] = castleMoves[idx];
     }
 
-    // ep horizontal pin
+    // ep horizontal and diagonal pin check
     for(int idx = 0; idx < numEp; idx++) {
         int from = MoveUtils::getFromSq(epMoves[idx]);
         int to = MoveUtils::getToSq(epMoves[idx]);
 
         int epRank = (from >> 3);
         int otherPawnSquare = (epRank << 3) | (to & 7);
-        U64 rooksQueens = (opponentPiecesBB & (this->rooksBB | this->queensBB) & BoardUtils::ranksBB[epRank]);
 
-        // remove the 2 pawns and compute attacks from rooks/queens on king square
-        U64 removeWhite = BoardUtils::bits[from], 
-            removeBlack = BoardUtils::bits[otherPawnSquare];
-        if(color == Black) swap(removeWhite, removeBlack);
+        // move the capturing pawn to 'to' and remove the captured pawn to check if king is left in check
+        U64 toggleWhite = (color == White ? (BoardUtils::bits[from] | BoardUtils::bits[to]) : BoardUtils::bits[otherPawnSquare]);
+        U64 toggleBlack = (color == Black ? (BoardUtils::bits[from] | BoardUtils::bits[to]) : BoardUtils::bits[otherPawnSquare]);
 
-        this->whitePiecesBB ^= removeWhite;
-        this->blackPiecesBB ^= removeBlack;
+        this->whitePiecesBB ^= toggleWhite;
+        this->blackPiecesBB ^= toggleBlack;
+        this->pawnsBB ^= (BoardUtils::bits[from] | BoardUtils::bits[to] | BoardUtils::bits[otherPawnSquare]);
 
         U64 attacks = this->attacksTo(kingSquare);
-        if((rooksQueens & attacks) == 0) moves[num++] = epMoves[idx];
+        if(attacks == 0) moves[num++] = epMoves[idx];
 
-        this->whitePiecesBB ^= removeWhite;
-        this->blackPiecesBB ^= removeBlack;
+        this->whitePiecesBB ^= toggleWhite;
+        this->blackPiecesBB ^= toggleBlack;
+        this->pawnsBB ^= (BoardUtils::bits[from] | BoardUtils::bits[to] | BoardUtils::bits[otherPawnSquare]);
     }
 
     // put the king back
@@ -888,28 +899,28 @@ int Board::generateLegalMovesQS(int *moves) {
 
     assert(numEp <= 2);
 
-    // ep horizontal pin
+    // ep horizontal and diagonal pin check
     for(int idx = 0; idx < numEp; idx++) {
         int from = MoveUtils::getFromSq(epMoves[idx]);
         int to = MoveUtils::getToSq(epMoves[idx]);
 
         int epRank = (from >> 3);
         int otherPawnSquare = (epRank << 3) | (to & 7);
-        U64 rooksQueens = (opponentPiecesBB & (this->rooksBB | this->queensBB) & BoardUtils::ranksBB[epRank]);
 
-        // remove the 2 pawns and compute attacks from rooks/queens on king square
-        U64 removeWhite = BoardUtils::bits[from], 
-            removeBlack = BoardUtils::bits[otherPawnSquare];
-        if(color == Black) swap(removeWhite, removeBlack);
+        // move the capturing pawn to 'to' and remove the captured pawn to check if king is left in check
+        U64 toggleWhite = (color == White ? (BoardUtils::bits[from] | BoardUtils::bits[to]) : BoardUtils::bits[otherPawnSquare]);
+        U64 toggleBlack = (color == Black ? (BoardUtils::bits[from] | BoardUtils::bits[to]) : BoardUtils::bits[otherPawnSquare]);
 
-        this->whitePiecesBB ^= removeWhite;
-        this->blackPiecesBB ^= removeBlack;
+        this->whitePiecesBB ^= toggleWhite;
+        this->blackPiecesBB ^= toggleBlack;
+        this->pawnsBB ^= (BoardUtils::bits[from] | BoardUtils::bits[to] | BoardUtils::bits[otherPawnSquare]);
 
         U64 attacks = this->attacksTo(kingSquare);
-        if((rooksQueens & attacks) == 0) moves[num++] = epMoves[idx];
+        if(attacks == 0) moves[num++] = epMoves[idx];
 
-        this->whitePiecesBB ^= removeWhite;
-        this->blackPiecesBB ^= removeBlack;
+        this->whitePiecesBB ^= toggleWhite;
+        this->blackPiecesBB ^= toggleBlack;
+        this->pawnsBB ^= (BoardUtils::bits[from] | BoardUtils::bits[to] | BoardUtils::bits[otherPawnSquare]);
     }
 
     // put the king back
@@ -921,17 +932,19 @@ int Board::generateLegalMovesQS(int *moves) {
 
 // make a move, updating the squares and bitboards
 void Board::makeMove(int move) {
+    repetitionMap[repetitionIndex++] = hashKey;
+    halfmoveStk.push(this->halfmoveClock);
+
     this->updateHashKey(move);
 
     if(move == MoveUtils::NO_MOVE) { // null move
         epStk.push(this->ep);
         this->ep = -1;
+        this->halfmoveClock++;
         this->turn ^= 8;
 
         return;
     }
-
-    repetitionMap[repetitionIndex++] = hashKey;
 
     // push the current castle and ep info in order to retrieve it when we unmake the move
     castleStk.push(this->castleRights);
@@ -952,6 +965,9 @@ void Board::makeMove(int move) {
     bool isMoveEP = MoveUtils::isEP(move);
     bool isMoveCapture = MoveUtils::isCapture(move);
     bool isMoveCastle = MoveUtils::isCastle(move);
+
+    if(piece == Pawn || isMoveCapture) this->halfmoveClock = 0;
+    else this->halfmoveClock++;
 
     // update bitboards
     this->updatePieceInBB(piece, color, from);
@@ -1016,6 +1032,10 @@ void Board::makeMove(int move) {
 void Board::unmakeMove(int move) {
     assert(epStk.top() >= -1 && epStk.top() < 64);
 
+    repetitionIndex--;
+    this->halfmoveClock = halfmoveStk.top();
+    halfmoveStk.pop();
+
     if(move == MoveUtils::NO_MOVE) { // null move
         this->ep = epStk.top();
         epStk.pop();
@@ -1025,8 +1045,6 @@ void Board::unmakeMove(int move) {
 
         return;
     }
-
-    repetitionIndex--;
 
     // get move info
     int from = MoveUtils::getFromSq(move);
@@ -1089,25 +1107,27 @@ void Board::unmakeMove(int move) {
 }
 
 bool Board::checkRepetition() {
-    for(int i = repetitionIndex-2; i >= 0; i -= 2) {
+    int minIdx = max(0, repetitionIndex - halfmoveClock);
+    for(int i = repetitionIndex-2; i >= minIdx; i -= 2) {
         if(repetitionMap[i] == hashKey) return true;
     }
 
     return false;
 }
 
-// draw by insufficient material or repetition
+// draw by insufficient material, fifty-move rule, or repetition
 bool Board::isDraw() {
+    if(this->halfmoveClock >= 100) return true;
     if(checkRepetition()) return true;
 
     if(this->queensBB | this->rooksBB | this->pawnsBB) return false;
 
     if((this->knightsBB | this->bishopsBB) == 0) return true; // king vs king
 
-    int whiteBishops = MagicBitboardUtils::popcount(this->bishopsBB | this->whitePiecesBB);
-    int blackBishops = MagicBitboardUtils::popcount(this->bishopsBB | this->blackPiecesBB);
-    int whiteKnights = MagicBitboardUtils::popcount(this->knightsBB | this->whitePiecesBB);
-    int blackKnights = MagicBitboardUtils::popcount(this->knightsBB | this->blackPiecesBB);
+    int whiteBishops = MagicBitboardUtils::popcount(this->bishopsBB & this->whitePiecesBB);
+    int blackBishops = MagicBitboardUtils::popcount(this->bishopsBB & this->blackPiecesBB);
+    int whiteKnights = MagicBitboardUtils::popcount(this->knightsBB & this->whitePiecesBB);
+    int blackKnights = MagicBitboardUtils::popcount(this->knightsBB & this->blackPiecesBB);
 
     if(whiteKnights + blackKnights + whiteBishops + blackBishops == 1) return true; // king and minor piece vs king
 

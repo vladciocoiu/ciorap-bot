@@ -97,12 +97,17 @@ void Search::sortMoves(int *moves, int num, short ply) {
     int hashMoveDepth = transpositionTable->retrieveDepthMove();
     int hashMoveReplace = transpositionTable->retrieveReplaceMove();
 
-    // check legality of killer moves
+    // check legality of hash and killer moves
     bool killerLegal[2] = {false, false};
+    bool hashDepthLegal = false, hashReplaceLegal = false;
     for(int idx = 0; idx < num; idx++) {
         if(killerMoves[ply][0] == moves[idx]) killerLegal[0] = true;
         if(killerMoves[ply][1] == moves[idx]) killerLegal[1] = true;
+        if(hashMoveDepth == moves[idx]) hashDepthLegal = true;
+        if(hashMoveReplace == moves[idx]) hashReplaceLegal = true;
     }
+    if(!hashDepthLegal) hashMoveDepth = MoveUtils::NO_MOVE;
+    if(!hashReplaceLegal) hashMoveReplace = MoveUtils::NO_MOVE;
 
     // split the other moves into captures and non captures for easier sorting
     for(int idx = 0; idx < num; idx++) {
@@ -157,7 +162,7 @@ void Search::sortMoves(int *moves, int num, short ply) {
 // --- QUIESCENCE SEARCH --- 
 // only searching for captures at the end of a regular search in order to ensure the engine won't miss obvious tactics
 int Search::quiescence(int alpha, int beta) {
-    if(!(nodesQ & 4095) && !infiniteTime) {
+    if(!((nodesSearched + nodesQ) & 1023) && !infiniteTime && bestMove != MoveUtils::NO_MOVE) {
         long long currTime = chrono::duration_cast<chrono::milliseconds>(chrono::system_clock::now().time_since_epoch()).count();
         if(currTime >= stopTime) timeOver = true;
     }
@@ -207,16 +212,16 @@ int Search::alphaBeta(int alpha, int beta, short depth, short ply, bool doNull) 
     assert(depth >= 0);
     assert(ply <= MAX_DEPTH);
 
-    if(!(nodesSearched & 4095) && !infiniteTime) {
+    int pvIndex = ply * (2 * MAX_DEPTH + 1 - ply) / 2;
+    int pvNextIndex = pvIndex + MAX_DEPTH - ply;
+    pvArray[pvIndex] = MoveUtils::NO_MOVE;
+
+    if(!((nodesSearched + nodesQ) & 1023) && !infiniteTime && bestMove != MoveUtils::NO_MOVE) {
         long long currTime = chrono::duration_cast<chrono::milliseconds>(chrono::system_clock::now().time_since_epoch()).count();
         if(currTime >= stopTime) timeOver = true;
     }
     if(timeOver) return 0;
     nodesSearched++;
-
-    int pvIndex = ply * (2 * MAX_DEPTH + 1 - ply) / 2;
-    int pvNextIndex = pvIndex + MAX_DEPTH - ply;
-    pvArray[pvIndex] = MoveUtils::NO_MOVE;
 
     int hashFlag = TranspositionTable::HASH_F_ALPHA;
 
@@ -229,7 +234,7 @@ int Search::alphaBeta(int alpha, int beta, short depth, short ply, bool doNull) 
     if (alpha >= mateScore) return alpha;
     if (beta <= matedScore) return beta;
 
-    if(board->isDraw()) return 0;
+    if(ply > 0 && board->isDraw()) return 0;
 
     bool isPV = (beta - alpha > 1);
 
@@ -287,10 +292,11 @@ int Search::alphaBeta(int alpha, int beta, short depth, short ply, bool doNull) 
     // --- INTERNAL ITERATIVE DEEPENING ---
     // if we don't have a move from the tt, we do a quick search with a reduced depth
     if(depth >= 4 && isPV && transpositionTable->retrieveBestMove() == MoveUtils::NO_MOVE) {
-        int score = alphaBeta(alpha, beta, depth - 2, ply + 1, doNull);
+        int score = alphaBeta(alpha, beta, depth - 2, ply, doNull);
 
         // make sure we have a move in the tt
-        if (score <= alpha) score = alphaBeta(-INF, beta, depth - 2, ply + 1, doNull);
+        if (score <= alpha) score = alphaBeta(-INF, beta, depth - 2, ply, doNull);
+        pvArray[pvIndex] = MoveUtils::NO_MOVE;
     }
 
     // --- FUTILITY PRUNING --- 
@@ -348,21 +354,11 @@ int Search::alphaBeta(int alpha, int beta, short depth, short ply, bool doNull) 
         board->unmakeMove(moves[idx]);
         movesSearched++;
 
-        if(timeOver && (ply > 0 || idx > 0)) return 0; // ensure that we at least have a move to print
+        if(timeOver) return 0; // ensure that we at least have a move to print
         
         if(score > alpha) {
             currBestMove = moves[idx];
-            if(ply == 0) bestMove = currBestMove;
             assert(currBestMove != MoveUtils::NO_MOVE);
-
-            if(isPV) {
-                pvArray[pvIndex] = moves[idx];
-                copyPv(pvArray + pvIndex + 1, pvArray + pvNextIndex, MAX_DEPTH - ply - 1);
-
-                assert(pvArray[pvIndex] != MoveUtils::NO_MOVE);
-            }
-            assert(pvIndex < pvNextIndex);
-            assert(pvNextIndex < (MAX_DEPTH * MAX_DEPTH + MAX_DEPTH) / 2);
 
             if(score >= beta) {
                 transpositionTable->recordHash(depth, beta, TranspositionTable::HASH_F_BETA, currBestMove, ply);
@@ -378,6 +374,15 @@ int Search::alphaBeta(int alpha, int beta, short depth, short ply, bool doNull) 
                 return beta;
             }
 
+            if(isPV) {
+                pvArray[pvIndex] = moves[idx];
+                copyPv(pvArray + pvIndex + 1, pvArray + pvNextIndex, MAX_DEPTH - ply - 1);
+
+                assert(pvArray[pvIndex] != MoveUtils::NO_MOVE);
+            }
+            assert(pvIndex < pvNextIndex);
+            assert(pvNextIndex < (MAX_DEPTH * MAX_DEPTH + MAX_DEPTH) / 2);
+
             hashFlag = TranspositionTable::HASH_F_EXACT;
             alpha = score;
         }
@@ -389,7 +394,6 @@ int Search::alphaBeta(int alpha, int beta, short depth, short ply, bool doNull) 
 }
 
 pair<int, int> Search::root() {
-    board->repetitionIndex = 0;
     bestMove = MoveUtils::NO_MOVE;
 
     timeOver = false;
@@ -429,6 +433,7 @@ pair<int, int> Search::root() {
         alpha = eval - ASP_INCREASE; // increase window for next iteration
         beta = eval + ASP_INCREASE;
 
+        if(pvArray[0] != MoveUtils::NO_MOVE) bestMove = pvArray[0];
         UCI::showSearchInfo(depth, nodesSearched+nodesQ, currStartTime, eval);
         currStartTime = chrono::duration_cast<chrono::milliseconds>(chrono::system_clock::now().time_since_epoch()).count();
 
@@ -437,6 +442,11 @@ pair<int, int> Search::root() {
 
     int moveToPlay = bestMove;
     if (moveToPlay == MoveUtils::NO_MOVE) moveToPlay = transpositionTable->retrieveBestMove();
+    if (moveToPlay == MoveUtils::NO_MOVE) {
+        int moves[256];
+        int num = board->generateLegalMoves(moves);
+        if (num > 0) moveToPlay = moves[0];
+    }
     assert(moveToPlay != MoveUtils::NO_MOVE);
 
     return {moveToPlay, eval};
@@ -505,4 +515,5 @@ void Search::showPV(int depth) {
         cout << BoardUtils::moveToString(pvArray[i]) << ' ';
     }
     cout << '\n';
+    cout.flush();
 }
