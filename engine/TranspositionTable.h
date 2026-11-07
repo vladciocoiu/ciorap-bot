@@ -7,7 +7,7 @@ class TranspositionTable {
 private:
     const int SIZE;
     struct hashElement;
-    hashElement **hashTable;
+    hashElement *hashTable;
 public:
     TranspositionTable();
     ~TranspositionTable();
