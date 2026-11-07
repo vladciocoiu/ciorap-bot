@@ -34,15 +34,11 @@ struct TranspositionTable::hashElement {
     int best;
 };
 
-TranspositionTable::TranspositionTable(): SIZE(1 << 22), hashTable(new hashElement*[SIZE]) {
-    for(int i = 0; i < SIZE; i++) {
-        hashTable[i] = new hashElement[2];
-    }
+TranspositionTable::TranspositionTable(): SIZE(1 << 22), hashTable(new hashElement[SIZE * 2]) {
     clear();
 }
 
 TranspositionTable::~TranspositionTable() {
-    for(int i = 0; i < SIZE; i++) delete[] hashTable[i];
     delete[] hashTable;
 }
 
@@ -68,7 +64,7 @@ int TranspositionTable::retrieveBestMove() {
     int index = (board->hashKey & (SIZE-1));
     assert(index >= 0 && index < SIZE);
 
-    hashElement *h = hashTable[index];
+    hashElement *h = &hashTable[index * 2];
 
     if(h[0].key == board->hashKey && h[0].best != MoveUtils::NO_MOVE) return h[0].best;
     if(h[1].key == board->hashKey) return h[1].best;
@@ -80,7 +76,7 @@ int TranspositionTable::retrieveDepthMove() {
     int index = (board->hashKey & (SIZE-1));
     assert(index >= 0 && index < SIZE);
 
-    hashElement *h = hashTable[index];
+    hashElement *h = &hashTable[index * 2];
 
     if(h[0].key == board->hashKey) return h[0].best;
 
@@ -91,7 +87,7 @@ int TranspositionTable::retrieveReplaceMove() {
     int index = (board->hashKey & (SIZE-1));
     assert(index >= 0 && index < SIZE);
 
-    hashElement *h = hashTable[index];
+    hashElement *h = &hashTable[index * 2];
 
     if(h[1].key == board->hashKey) return h[1].best;
 
@@ -103,7 +99,7 @@ int TranspositionTable::probeHash(short depth, int alpha, int beta, int ply) {
     int index = (board->hashKey & (SIZE-1));
     assert(index >= 0 && index < SIZE);
 
-    hashElement *h = hashTable[index];
+    hashElement *h = &hashTable[index * 2];
 
     for(int i = 0; i < 2; i++) {
         if(h[i].key == board->hashKey) {
@@ -133,7 +129,7 @@ void TranspositionTable::recordHash(short depth, int val, int hashF, int best, i
     int index = (board->hashKey & (SIZE-1));
     assert(index >= 0 && index < SIZE);
 
-    hashElement *h = hashTable[index];
+    hashElement *h = &hashTable[index * 2];
 
     // current score is relative to the root position
     // we want to store it relative to the current position
@@ -160,8 +156,9 @@ void TranspositionTable::recordHash(short depth, int val, int hashF, int best, i
 
 void TranspositionTable::clear() {
     hashElement newElement = {0, -2, HASH_F_UNKNOWN, 0, MoveUtils::NO_MOVE};
-    for(int i = 0; i < SIZE; i++) {
-        hashTable[i][0] = hashTable[i][1] = newElement;
+    int total = SIZE * 2;
+    for(int i = 0; i < total; i++) {
+        hashTable[i] = newElement;
     }
 }
 
