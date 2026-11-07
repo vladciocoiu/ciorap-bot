@@ -247,33 +247,55 @@ int evaluate(
     pawnCntWhite = pawnCntBlack = 0;
     pieceMaterialWhite = pieceMaterialBlack = 0;
 
-    // evaluate pieces independently
+    // evaluate pieces independently using bitboard loops
     int res = 0;
-    for(int sq = 0; sq < 64; sq++) {
-        if(board->squares[sq] == Empty) continue;
 
+    U64 knights = board->knightsBB;
+    while(knights) {
+        int sq = MagicBitboardUtils::bitscanForward(knights);
         int color = (board->squares[sq] & (Black | White));
         int c = (color == White ? 1 : -1);
-
-        if(board->knightsBB & BoardUtils::bits[sq]) res += evalKnight(
+        res += evalKnight(
             sq, color, KNIGHT_TABLE,
             KNIGHT_MOBILITY, KNIGHT_PAWN_CONST, TRAPPED_KNIGHT_PENALTY, 
             BLOCKING_C_KNIGHT, KNIGHT_DEF_BY_PAWN, PIECE_VALUES, PIECE_ATTACK_WEIGHT) * c;
+        knights &= (knights - 1);
+    }
 
-        if(board->bishopsBB & BoardUtils::bits[sq]) res += evalBishop(
+    U64 bishops = board->bishopsBB;
+    while(bishops) {
+        int sq = MagicBitboardUtils::bitscanForward(bishops);
+        int color = (board->squares[sq] & (Black | White));
+        int c = (color == White ? 1 : -1);
+        res += evalBishop(
             sq, color, BISHOP_TABLE, 
             TRAPPED_BISHOP_PENALTY, BLOCKED_BISHOP_PENALTY, 
             FIANCHETTO_BONUS, BISHOP_MOBILITY, PIECE_VALUES, PIECE_ATTACK_WEIGHT) * c;
+        bishops &= (bishops - 1);
+    }
 
-        if(board->rooksBB & BoardUtils::bits[sq]) res += evalRook(
+    U64 rooks = board->rooksBB;
+    while(rooks) {
+        int sq = MagicBitboardUtils::bitscanForward(rooks);
+        int color = (board->squares[sq] & (Black | White));
+        int c = (color == White ? 1 : -1);
+        res += evalRook(
             sq, color, ROOK_TABLE, 
-            BLOCKED_ROOK_PENALTY,ROOK_PAWN_CONST, ROOK_ON_OPEN_FILE, 
+            BLOCKED_ROOK_PENALTY, ROOK_PAWN_CONST, ROOK_ON_OPEN_FILE, 
             ROOK_ON_SEVENTH, ROOKS_DEF_EACH_OTHER, ROOK_ON_QUEEN_FILE, ROOK_MOBILITY, 
             PIECE_VALUES, PIECE_ATTACK_WEIGHT) * c;
+        rooks &= (rooks - 1);
+    }
 
-        if(board->queensBB & BoardUtils::bits[sq]) res += evalQueen(
+    U64 queens = board->queensBB;
+    while(queens) {
+        int sq = MagicBitboardUtils::bitscanForward(queens);
+        int color = (board->squares[sq] & (Black | White));
+        int c = (color == White ? 1 : -1);
+        res += evalQueen(
             sq, color, QUEEN_TABLE, EARLY_QUEEN_DEVELOPMENT,
             QUEEN_MOBILITY, PIECE_VALUES, PIECE_ATTACK_WEIGHT) * c;
+        queens &= (queens - 1);
     }
     res += evalPawnStructure(
         MG_PAWN_TABLE, EG_PAWN_TABLE, PASSED_PAWN_TABLE,
