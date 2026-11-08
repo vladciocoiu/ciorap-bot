@@ -43,7 +43,7 @@ int Search::pvArray[(MAX_DEPTH * MAX_DEPTH + MAX_DEPTH) / 2 + MAX_DEPTH];
 
 const int Search::ASP_INCREASE = 50;
 
-static const int SEE_PIECE_VALUES[7] = {0, 100, 325, 350, 500, 975, 20000};
+static const int SEE_PIECE_VALUES[7] = {0, 100, 325, 325, 500, 975, 20000};
 
 // --- STATIC EXCHANGE EVALUATION ---
 // returns the material gain (in centipawns) of a capture, assuming both sides
