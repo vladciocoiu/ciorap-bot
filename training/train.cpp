@@ -11,8 +11,12 @@
 #include <algorithm>
 #include <thread>
 #include <cstdio>
+#ifdef _WIN32
+#include <process.h>
+#else
 #include <unistd.h>
 #include <sys/wait.h>
+#endif
 
 #include "../engine/Evaluate.h"
 #include "../engine/Board.h"
@@ -1133,7 +1137,8 @@ int runTexelTuning(const string& inputFile, const string& outputFile, int epochs
     vector<double> v(TOTAL_PARAMS, 0.0);
     const double beta1 = 0.9;
     const double beta2 = 0.999;
-    const double eps = 1e-8;
+    // Larger epsilon dampens noisy updates on ultra-rare PST squares while leaving frequent terms unaffected
+    const double eps = 1e-5;
 
     vector<int> bestIntParams = initVec;
     double bestValMSE = initValMSE;
@@ -1145,6 +1150,10 @@ int runTexelTuning(const string& inputFile, const string& outputFile, int epochs
     auto tuneStart = chrono::steady_clock::now();
 
     for(int epoch = 1; epoch <= epochs; epoch++) {
+        // Cosine annealing learning rate schedule from lr down to 0.01 * lr
+        double progress = (epochs > 1) ? (double)(epoch - 1) / (double)(epochs - 1) : 1.0;
+        double currLr = lr * (0.01 + 0.99 * 0.5 * (1.0 + cos(3.14159265358979323846 * progress)));
+
         for(unsigned int t = 0; t < nThreads; t++) {
             fill(threadGrads[t].begin(), threadGrads[t].end(), 0.0);
         }
@@ -1221,7 +1230,7 @@ int runTexelTuning(const string& inputFile, const string& outputFile, int epochs
             double mHat = m[p] / biasCorr1;
             double vHat = v[p] / biasCorr2;
 
-            w[p] -= lr * mHat / (sqrt(vHat) + eps);
+            w[p] -= currLr * mHat / (sqrt(vHat) + eps);
             if(p >= OFF_PIECE_ATTACK_WEIGHT && p < OFF_PIECE_ATTACK_WEIGHT + 6) {
                 w[p] = max(0.0, w[p]);
             }
@@ -1240,6 +1249,7 @@ int runTexelTuning(const string& inputFile, const string& outputFile, int epochs
             auto now = chrono::steady_clock::now();
             double elapsed = chrono::duration<double>(now - tuneStart).count();
             cout << "Epoch " << setw(4) << epoch << "/" << epochs
+                 << " | lr: " << setprecision(4) << currLr
                  << " | Train MSE: " << setprecision(7) << trainMSE
                  << " | Val MSE: " << valMSE
                  << " | Best Val: " << bestValMSE << " (ep " << bestEpoch << ")"
@@ -1311,7 +1321,12 @@ bool setupRandomOpening(mt19937& rng) {
 
 void runDatagenWorker(int workerId, const string& shardFile, int targetPositions, int searchDepth) {
     uint64_t seed = chrono::high_resolution_clock::now().time_since_epoch().count();
-    seed ^= (uint64_t)getpid() * 0x9e3779b97f4a7c15ULL + (uint64_t)workerId * 1337ULL;
+#ifdef _WIN32
+    uint64_t pidVal = (uint64_t)_getpid();
+#else
+    uint64_t pidVal = (uint64_t)getpid();
+#endif
+    seed ^= pidVal * 0x9e3779b97f4a7c15ULL + (uint64_t)workerId * 1337ULL;
     mt19937 rng(seed);
 
     ofstream fout(shardFile);
@@ -1440,7 +1455,7 @@ void runDatagenWorker(int workerId, const string& shardFile, int targetPositions
     fout.close();
 }
 
-int runSelfPlayDatagen(const string& outputFile, int totalPositions, int numWorkers, int searchDepth) {
+int runSelfPlayDatagen(const char* progPath, const string& outputFile, int totalPositions, int numWorkers, int searchDepth) {
     if(numWorkers <= 0) {
         numWorkers = max(1u, thread::hardware_concurrency());
     }
@@ -1452,7 +1467,11 @@ int runSelfPlayDatagen(const string& outputFile, int totalPositions, int numWork
          << "  Max pos / game   : " << MAX_POSITIONS_PER_GAME << "\n";
 
     auto startTime = chrono::steady_clock::now();
+#ifdef _WIN32
+    vector<intptr_t> children;
+#else
     vector<pid_t> children;
+#endif
     vector<string> shardFiles;
 
     int baseQuota = totalPositions / numWorkers;
@@ -1465,6 +1484,19 @@ int runSelfPlayDatagen(const string& outputFile, int totalPositions, int numWork
         string shard = outputFile + ".part." + to_string(w);
         shardFiles.push_back(shard);
 
+#ifdef _WIN32
+        string wStr = to_string(w);
+        string qStr = to_string(quota);
+        string dStr = to_string(searchDepth);
+        intptr_t handle = _spawnl(_P_NOWAIT, progPath, progPath, "--datagen-worker",
+                                  wStr.c_str(), shard.c_str(), qStr.c_str(), dStr.c_str(), nullptr);
+        if(handle == -1) {
+            cerr << "Failed to spawn worker " << w << '\n';
+            return 1;
+        }
+        children.push_back(handle);
+#else
+        (void)progPath;
         pid_t pid = fork();
         if(pid < 0) {
             cerr << "Failed to fork worker " << w << '\n';
@@ -1476,13 +1508,21 @@ int runSelfPlayDatagen(const string& outputFile, int totalPositions, int numWork
         } else {
             children.push_back(pid);
         }
+#endif
     }
 
     // Wait for all worker processes to complete
+#ifdef _WIN32
+    for(intptr_t handle : children) {
+        int status = 0;
+        _cwait(&status, handle, _WAIT_CHILD);
+    }
+#else
     for(pid_t pid : children) {
         int status = 0;
         waitpid(pid, &status, 0);
     }
+#endif
 
     // Merge all worker shards (keeping games contiguous for clean train/val split)
     vector<string> allLines;
@@ -1574,6 +1614,17 @@ int main(int argc, char **argv) {
     transpositionTable = new TranspositionTable();
     init();
 
+    if(argc >= 6 && string(argv[1]) == "--datagen-worker") {
+        int workerId = atoi(argv[2]);
+        string shardFile = argv[3];
+        int quota = atoi(argv[4]);
+        int searchDepth = atoi(argv[5]);
+        runDatagenWorker(workerId, shardFile, quota, searchDepth);
+        delete transpositionTable;
+        delete board;
+        return 0;
+    }
+
     if(argc >= 2 && string(argv[1]) == "--datagen") {
         if(argc < 4) {
             printUsage(argv[0]);
@@ -1586,7 +1637,7 @@ int main(int argc, char **argv) {
         int numWorkers = (argc >= 5) ? atoi(argv[4]) : (int)max(1u, thread::hardware_concurrency());
         int searchDepth = (argc >= 6) ? atoi(argv[5]) : 5;
 
-        int rc = runSelfPlayDatagen(outputFile, totalPositions, numWorkers, searchDepth);
+        int rc = runSelfPlayDatagen(argv[0], outputFile, totalPositions, numWorkers, searchDepth);
         delete transpositionTable;
         delete board;
         return rc;
