@@ -139,16 +139,16 @@ void TranspositionTable::recordHash(short depth, int val, int hashF, int best, i
     // first bucket is depth only
     bool replace = (h[0].depth <= depth);
     if(replace) {
+        if(best != MoveUtils::NO_MOVE || h[0].key != board->hashKey) h[0].best = best;
         h[0].key = board->hashKey;
-        h[0].best = best;
         h[0].value = val;
         h[0].flags = hashF;
         h[0].depth = depth;
     }
     
     // second bucket is always replace
+    if(best != MoveUtils::NO_MOVE || h[1].key != board->hashKey) h[1].best = best;
     h[1].key = board->hashKey;
-    h[1].best = best;
     h[1].value = val;
     h[1].flags = hashF;
     h[1].depth = depth;
